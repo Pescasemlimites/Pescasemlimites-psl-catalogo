@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Header from "../../components/Header";
 import { supabase } from "../../lib/supabaseClient";
 import { useAuth } from "../../contexts/AuthContext";
+import { calcularPrecificacaoArma } from "../../lib/precoCustoMargem";
 
 type Marca = { id: string; nome: string };
 type Calibre = { id: string; nome: string };
@@ -31,6 +32,13 @@ type Arma = {
   caracteristica_acabamento: string | null;
   foto_url: string | null;
   em_destaque: boolean | null;
+  em_promocao?: boolean | null;
+  preco_promocional?: number | null;
+  promocao_modo?: string | null;
+  promocao_parcelas_max?: number | null;
+  destaque_promocao?: boolean | null;
+  preco_custo?: number | null;
+  margem_venda_percent?: number | null;
   marca?: { nome: string } | null;
   calibre?: { nome: string } | null;
   funcionamento?: { nome: string } | null;
@@ -50,12 +58,21 @@ type FormArma = {
   espec_comprimento_cano: string;
   caracteristica_acabamento: string;
   em_destaque: boolean;
+  em_promocao: boolean;
+  preco_promocional: string;
+  promocao_modo: "avista" | "parcelado";
+  promocao_parcelas_max: string;
+  destaque_promocao: boolean;
+  preco_custo: string;
+  margem_venda_percent: string;
 };
 
 type Variacao = {
   id?: string;
   calibre_id: string;
   comprimento_cano: string;
+  /** Custo desta variação (opcional; se vazio, ações de precificação usam o custo geral da arma) */
+  preco_custo: string;
   preco: string;
   caracteristica_acabamento: string;
   fotoFiles?: File[];
@@ -76,12 +93,30 @@ const initialForm: FormArma = {
   espec_comprimento_cano: "",
   caracteristica_acabamento: "",
   em_destaque: false,
+  em_promocao: false,
+  preco_promocional: "",
+  promocao_modo: "avista",
+  promocao_parcelas_max: "12",
+  destaque_promocao: false,
+  preco_custo: "",
+  margem_venda_percent: "",
 };
 
 const inputClass =
   "w-full rounded-lg border border-zinc-600 bg-zinc-800/50 px-4 py-2.5 text-white placeholder-zinc-500 focus:border-[#E9B20E] focus:outline-none focus:ring-1 focus:ring-[#E9B20E]";
 
 const labelClass = "mb-1.5 block text-sm font-medium text-zinc-300";
+
+/** Primeira foto (capa) para listagem admin */
+function armaCapaUrl(arma: Arma): string | null {
+  const sorted = [...(arma.fotos || [])].sort((a, b) => a.ordem - b.ordem);
+  return sorted[0]?.foto_url ?? arma.foto_url ?? null;
+}
+
+function armaFotosExtrasCount(arma: Arma): number {
+  const n = arma.fotos?.length ?? 0;
+  return n > 0 ? Math.max(0, n - 1) : 0;
+}
 
 export default function CadastrosPage() {
   const router = useRouter();
@@ -109,11 +144,21 @@ export default function CadastrosPage() {
   const [filtroMarca, setFiltroMarca] = useState<string>("");
   const [filtroCalibre, setFiltroCalibre] = useState<string>("");
   const [filtroNome, setFiltroNome] = useState<string>("");
+  const [selectedArmaIds, setSelectedArmaIds] = useState<Set<string>>(() => new Set());
+  const [bulkMargemStr, setBulkMargemStr] = useState("");
+  const [bulkMargemLoading, setBulkMargemLoading] = useState(false);
   const [comVariacao, setComVariacao] = useState(false);
   const [variacoes, setVariacoes] = useState<Variacao[]>([]);
-  const [activeTab, setActiveTab] = useState<"armas" | "marcas" | "calibres">(
-    "armas"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "armas" | "marcas" | "calibres" | "configuracoes"
+  >("armas");
+  const [tributacao, setTributacao] = useState({
+    nomeSimples: "Imposto Simples",
+    nomeDifal: "DIFAL",
+    pctSimplesStr: "0",
+    pctDifalStr: "0",
+  });
+  const [configSaving, setConfigSaving] = useState(false);
   // Marcas
   const [novaMarca, setNovaMarca] = useState("");
   const [marcaEditandoId, setMarcaEditandoId] = useState<string | null>(null);
@@ -288,7 +333,36 @@ export default function CadastrosPage() {
     fetchFuncionamentos();
     fetchCategorias();
     fetchArmas();
+    fetchCatalogoConfig();
   }, [authLoading]);
+
+  const fetchCatalogoConfig = async () => {
+    const { data, error } = await supabase
+      .from("catalogo_config")
+      .select(
+        "nome_imposto_simples, nome_difal, imposto_simples_percent, difal_percent"
+      )
+      .eq("id", 1)
+      .maybeSingle();
+    if (error) {
+      console.warn("catalogo_config:", error);
+      return;
+    }
+    const s = data?.imposto_simples_percent != null ? Number(data.imposto_simples_percent) : 0;
+    const d = data?.difal_percent != null ? Number(data.difal_percent) : 0;
+    setTributacao({
+      nomeSimples: (data?.nome_imposto_simples as string)?.trim() || "Imposto Simples",
+      nomeDifal: (data?.nome_difal as string)?.trim() || "DIFAL",
+      pctSimplesStr: (Number.isFinite(s) ? s : 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 4,
+      }),
+      pctDifalStr: (Number.isFinite(d) ? d : 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 4,
+      }),
+    });
+  };
 
   useEffect(() => {
     const checkAdminAccess = async () => {
@@ -404,8 +478,16 @@ export default function CadastrosPage() {
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const target = e.target;
-    const value = target.type === 'checkbox' ? (target as HTMLInputElement).checked : target.value;
-    setForm((prev) => ({ ...prev, [target.name]: value }));
+    const name = target.name;
+    const rawValue =
+      target.type === "checkbox" ? (target as HTMLInputElement).checked : target.value;
+    const value =
+      name === "promocao_modo" && typeof rawValue === "string"
+        ? rawValue === "parcelado"
+          ? "parcelado"
+          : "avista"
+        : rawValue;
+    setForm((prev) => ({ ...prev, [name]: value } as FormArma));
     setMessage(null);
   };
 
@@ -485,7 +567,17 @@ export default function CadastrosPage() {
   const addVariacao = () => {
     setVariacoes((prev) => [
       ...prev,
-      { calibre_id: "", comprimento_cano: "", preco: "", caracteristica_acabamento: "", fotoFiles: [], fotoPreviews: [], fotosExistentes: [], fotosParaRemover: [] },
+      {
+        calibre_id: "",
+        comprimento_cano: "",
+        preco_custo: "",
+        preco: "",
+        caracteristica_acabamento: "",
+        fotoFiles: [],
+        fotoPreviews: [],
+        fotosExistentes: [],
+        fotosParaRemover: [],
+      },
     ]);
   };
 
@@ -562,6 +654,35 @@ export default function CadastrosPage() {
       espec_comprimento_cano: arma.espec_comprimento_cano || "",
       caracteristica_acabamento: arma.caracteristica_acabamento || "",
       em_destaque: arma.em_destaque || false,
+      em_promocao: arma.em_promocao || false,
+      preco_promocional:
+        arma.preco_promocional != null
+          ? Number(arma.preco_promocional).toLocaleString("pt-BR", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+          : "",
+      promocao_modo:
+        arma.promocao_modo === "parcelado" || arma.promocao_modo === "avista"
+          ? arma.promocao_modo
+          : "avista",
+      promocao_parcelas_max:
+        arma.promocao_parcelas_max != null ? String(arma.promocao_parcelas_max) : "12",
+      destaque_promocao: arma.destaque_promocao || false,
+      preco_custo:
+        arma.preco_custo != null
+          ? Number(arma.preco_custo).toLocaleString("pt-BR", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+          : "",
+      margem_venda_percent:
+        arma.margem_venda_percent != null
+          ? Number(arma.margem_venda_percent).toLocaleString("pt-BR", {
+              minimumFractionDigits: 0,
+              maximumFractionDigits: 4,
+            })
+          : "",
     });
     setFotoFiles([]);
     setFotoPreviews([]);
@@ -574,7 +695,7 @@ export default function CadastrosPage() {
     const [variacoesResult, fotosResult] = await Promise.all([
       supabase
         .from("variacoes_armas")
-        .select("id, calibre_id, comprimento_cano, preco, caracteristica_acabamento")
+        .select("id, calibre_id, comprimento_cano, preco, preco_custo, caracteristica_acabamento")
         .eq("arma_id", arma.id)
         .order("created_at", { ascending: true }),
       supabase
@@ -610,6 +731,13 @@ export default function CadastrosPage() {
         id: v.id,
         calibre_id: v.calibre_id || "",
         comprimento_cano: v.comprimento_cano || "",
+        preco_custo:
+          v.preco_custo != null
+            ? Number(v.preco_custo).toLocaleString("pt-BR", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })
+            : "",
         preco: v.preco != null ? Number(v.preco).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "",
         caracteristica_acabamento: v.caracteristica_acabamento ?? "",
         fotosExistentes: fotosPorVariacao.get(v.id) || [],
@@ -668,6 +796,98 @@ export default function CadastrosPage() {
     return parseFloat(s.replace(/\./g, "").replace(",", "."));
   };
 
+  const formatPrecoBr = (n: number) =>
+    n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const custoMargemParaDb = (): {
+    preco_custo: number | null;
+    margem_venda_percent: number | null;
+  } => {
+    const custo = parsePreco(form.preco_custo);
+    const margem = parsePreco(form.margem_venda_percent);
+    return {
+      preco_custo: custo != null && custo >= 0 ? custo : null,
+      margem_venda_percent: margem != null && margem >= 0 ? margem : null,
+    };
+  };
+
+  const handleSalvarCatalogoConfig = async () => {
+    const nomeS = tributacao.nomeSimples.trim() || "Imposto Simples";
+    const nomeD = tributacao.nomeDifal.trim() || "DIFAL";
+    const parsedS = parsePreco(tributacao.pctSimplesStr);
+    const parsedD = parsePreco(tributacao.pctDifalStr);
+    if (parsedS == null || parsedS < 0 || parsedD == null || parsedD < 0) {
+      setMessage({
+        type: "error",
+        text: "Informe percentuais válidos (≥ 0) para Imposto Simples e DIFAL.",
+      });
+      return;
+    }
+    setConfigSaving(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase.from("catalogo_config").upsert(
+        {
+          id: 1,
+          nome_imposto_simples: nomeS,
+          nome_difal: nomeD,
+          imposto_simples_percent: parsedS,
+          difal_percent: parsedD,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+      if (error) throw error;
+      setTributacao((prev) => ({
+        ...prev,
+        nomeSimples: nomeS,
+        nomeDifal: nomeD,
+        pctSimplesStr: parsedS.toLocaleString("pt-BR", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 4,
+        }),
+        pctDifalStr: parsedD.toLocaleString("pt-BR", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 4,
+        }),
+      }));
+      setMessage({ type: "ok", text: "Configuração de tributos salva." });
+    } catch (e: any) {
+      setMessage({ type: "error", text: e?.message || "Erro ao salvar configuração." });
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  const promocaoColunasParaDb = (): Record<string, unknown> => {
+    if (!form.em_promocao) {
+      return {
+        em_promocao: false,
+        preco_promocional: null,
+        promocao_modo: null,
+        promocao_parcelas_max: null,
+        destaque_promocao: false,
+      };
+    }
+    const precoPromo = parsePreco(form.preco_promocional);
+    return {
+      em_promocao: true,
+      preco_promocional: precoPromo,
+      promocao_modo: form.promocao_modo,
+      promocao_parcelas_max:
+        form.promocao_modo === "parcelado"
+          ? Math.max(2, parseInt(String(form.promocao_parcelas_max), 10) || 2)
+          : null,
+      destaque_promocao: Boolean(form.destaque_promocao),
+    };
+  };
+
+  const limparDestaquePromoOutros = async (armaId: string) => {
+    if (form.em_promocao && form.destaque_promocao) {
+      await supabase.from("armas").update({ destaque_promocao: false }).neq("id", armaId);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
@@ -679,6 +899,26 @@ export default function CadastrosPage() {
         setMessage({ type: "error", text: "O nome do produto é obrigatório." });
         setSubmitLoading(false);
         return;
+      }
+
+      if (form.em_promocao) {
+        const precoPromo = parsePreco(form.preco_promocional);
+        if (precoPromo == null || precoPromo <= 0) {
+          setMessage({ type: "error", text: "Informe um preço promocional válido." });
+          setSubmitLoading(false);
+          return;
+        }
+        if (form.promocao_modo === "parcelado") {
+          const n = parseInt(String(form.promocao_parcelas_max), 10);
+          if (!n || n < 2) {
+            setMessage({
+              type: "error",
+              text: "Em promoção parcelada, informe o máximo de parcelas (2 ou mais).",
+            });
+            setSubmitLoading(false);
+            return;
+          }
+        }
       }
 
       const precoValue = form.preco
@@ -712,9 +952,12 @@ export default function CadastrosPage() {
             espec_comprimento_cano: null,
             caracteristica_acabamento: form.caracteristica_acabamento || null,
             em_destaque: form.em_destaque || false,
+            ...promocaoColunasParaDb(),
+            ...custoMargemParaDb(),
           };
           const { error: updateError } = await supabase.from("armas").update(updateData).eq("id", editingId);
           if (updateError) throw updateError;
+          await limparDestaquePromoOutros(editingId);
 
           const currentVariacaoIds = variacoes.map((v) => v.id).filter(Boolean) as string[];
           if (currentVariacaoIds.length > 0) {
@@ -729,17 +972,34 @@ export default function CadastrosPage() {
             const v = variacoes[i];
             const precoVar = parsePreco(v.preco);
             if (precoVar == null) continue;
+            const custoVarDb = (() => {
+              const c = parsePreco(v.preco_custo);
+              return c != null && c >= 0 ? c : null;
+            })();
             let variacaoId: string;
             if (v.id) {
               await supabase
                 .from("variacoes_armas")
-                .update({ calibre_id: v.calibre_id || null, comprimento_cano: v.comprimento_cano.trim(), preco: precoVar, caracteristica_acabamento: (v.caracteristica_acabamento?.trim() || null) })
+                .update({
+                  calibre_id: v.calibre_id || null,
+                  comprimento_cano: v.comprimento_cano.trim(),
+                  preco: precoVar,
+                  preco_custo: custoVarDb,
+                  caracteristica_acabamento: v.caracteristica_acabamento?.trim() || null,
+                })
                 .eq("id", v.id);
               variacaoId = v.id;
             } else {
               const { data: inserted, error: insErr } = await supabase
                 .from("variacoes_armas")
-                .insert({ arma_id: editingId, calibre_id: v.calibre_id || null, comprimento_cano: v.comprimento_cano.trim(), preco: precoVar, caracteristica_acabamento: (v.caracteristica_acabamento?.trim() || null) })
+                .insert({
+                  arma_id: editingId,
+                  calibre_id: v.calibre_id || null,
+                  comprimento_cano: v.comprimento_cano.trim(),
+                  preco: precoVar,
+                  preco_custo: custoVarDb,
+                  caracteristica_acabamento: v.caracteristica_acabamento?.trim() || null,
+                })
                 .select("id")
                 .single();
               if (insErr || !inserted) throw insErr || new Error("Erro ao criar variação");
@@ -802,19 +1062,33 @@ export default function CadastrosPage() {
               espec_comprimento_cano: null,
               caracteristica_acabamento: form.caracteristica_acabamento || null,
               em_destaque: form.em_destaque || false,
+              ...promocaoColunasParaDb(),
+              ...custoMargemParaDb(),
             })
             .select("id")
             .single();
           if (insertError || !insertData) throw insertError || new Error("Erro ao cadastrar arma");
           const armaId = insertData.id as string;
+          await limparDestaquePromoOutros(armaId);
 
           for (let i = 0; i < variacoes.length; i++) {
             const v = variacoes[i];
             const precoVar = parsePreco(v.preco);
             if (precoVar == null) continue;
+            const custoVarDb = (() => {
+              const c = parsePreco(v.preco_custo);
+              return c != null && c >= 0 ? c : null;
+            })();
             const { data: varRow, error: varErr } = await supabase
               .from("variacoes_armas")
-              .insert({ arma_id: armaId, calibre_id: v.calibre_id || null, comprimento_cano: v.comprimento_cano.trim(), preco: precoVar, caracteristica_acabamento: (v.caracteristica_acabamento?.trim() || null) })
+              .insert({
+                arma_id: armaId,
+                calibre_id: v.calibre_id || null,
+                comprimento_cano: v.comprimento_cano.trim(),
+                preco: precoVar,
+                preco_custo: custoVarDb,
+                caracteristica_acabamento: v.caracteristica_acabamento?.trim() || null,
+              })
               .select("id")
               .single();
             if (varErr || !varRow) throw varErr || new Error("Erro ao criar variação");
@@ -870,6 +1144,8 @@ export default function CadastrosPage() {
           espec_comprimento_cano: form.espec_comprimento_cano || null,
           caracteristica_acabamento: form.caracteristica_acabamento || null,
           em_destaque: form.em_destaque || false,
+          ...promocaoColunasParaDb(),
+          ...custoMargemParaDb(),
         };
 
         const { error: updateError } = await supabase
@@ -878,6 +1154,7 @@ export default function CadastrosPage() {
           .eq("id", editingId);
 
         if (updateError) throw updateError;
+        await limparDestaquePromoOutros(editingId);
 
         // Remover fotos marcadas para remoção
         if (fotosParaRemover.length > 0) {
@@ -1005,6 +1282,8 @@ export default function CadastrosPage() {
               espec_comprimento_cano: form.espec_comprimento_cano || null,
               caracteristica_acabamento: form.caracteristica_acabamento || null,
               em_destaque: form.em_destaque || false,
+              ...promocaoColunasParaDb(),
+              ...custoMargemParaDb(),
             },
           ])
           .select("id")
@@ -1015,6 +1294,7 @@ export default function CadastrosPage() {
         }
 
         const armaId = insertData.id as string;
+        await limparDestaquePromoOutros(armaId);
 
         // Fazer upload de todas as fotos
         if (fotoFiles.length > 0) {
@@ -1087,10 +1367,61 @@ export default function CadastrosPage() {
     return matchMarca && matchCalibre && matchNome;
   });
 
+  const filtroArmasAtivo = !!(filtroMarca || filtroCalibre || filtroNome);
+  const selectedVisibleCount = armasFiltradas.filter((a) => selectedArmaIds.has(a.id)).length;
+  const headerSelectRef = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    const el = headerSelectRef.current;
+    if (!el) return;
+    el.indeterminate =
+      armasFiltradas.length > 0 &&
+      selectedVisibleCount > 0 &&
+      selectedVisibleCount < armasFiltradas.length;
+  }, [selectedVisibleCount, armasFiltradas.length]);
+
   const limparFiltros = () => {
     setFiltroMarca("");
     setFiltroCalibre("");
     setFiltroNome("");
+  };
+
+  const aplicarMargemEmMassa = async () => {
+    const ids = [...selectedArmaIds];
+    if (ids.length === 0) {
+      setMessage({ type: "error", text: "Selecione pelo menos uma arma." });
+      return;
+    }
+    const margem = parsePreco(bulkMargemStr);
+    if (margem == null || margem < 0) {
+      setMessage({
+        type: "error",
+        text: "Informe um percentual de lucro válido (número ≥ 0).",
+      });
+      return;
+    }
+    setBulkMargemLoading(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase
+        .from("armas")
+        .update({ margem_venda_percent: margem })
+        .in("id", ids);
+      if (error) throw error;
+      setMessage({
+        type: "ok",
+        text: `% de lucro (${margem.toLocaleString("pt-BR")}%) aplicado a ${ids.length} produto(s).`,
+      });
+      setBulkMargemStr("");
+      setSelectedArmaIds(new Set());
+      await fetchArmas();
+    } catch (err: any) {
+      setMessage({
+        type: "error",
+        text: err?.message || "Erro ao atualizar margem em massa.",
+      });
+    } finally {
+      setBulkMargemLoading(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -1158,6 +1489,64 @@ export default function CadastrosPage() {
       setDeletingId(null);
     }
   };
+
+  const custoParsedModal = parsePreco(form.preco_custo);
+  const margemParsedModal = parsePreco(form.margem_venda_percent);
+  const pctSimplesModal = parsePreco(tributacao.pctSimplesStr) ?? 0;
+  const pctDifalModal = parsePreco(tributacao.pctDifalStr) ?? 0;
+  const precificacaoModal =
+    custoParsedModal != null &&
+    custoParsedModal >= 0 &&
+    margemParsedModal != null &&
+    margemParsedModal >= 0
+      ? calcularPrecificacaoArma(
+          custoParsedModal,
+          pctSimplesModal,
+          pctDifalModal,
+          margemParsedModal
+        )
+      : null;
+
+  const podeUsarMargemVariacoes =
+    margemParsedModal != null && margemParsedModal >= 0;
+
+  /** Custo numérico para precificação: custo da linha ou custo geral do produto */
+  const custoNumericoVariacao = (v: Variacao): number | null => {
+    const local = parsePreco(v.preco_custo);
+    if (local != null && local >= 0) return local;
+    if (custoParsedModal != null && custoParsedModal >= 0) return custoParsedModal;
+    return null;
+  };
+
+  const precoSugeridoParaVariacao = (v: Variacao): number | null => {
+    if (!podeUsarMargemVariacoes) return null;
+    const custo = custoNumericoVariacao(v);
+    if (custo == null) return null;
+    return calcularPrecificacaoArma(
+      custo,
+      pctSimplesModal,
+      pctDifalModal,
+      margemParsedModal!
+    ).precoSugerido;
+  };
+
+  const mostrarBlocoPrecificacao =
+    precificacaoModal != null || (comVariacao && podeUsarMargemVariacoes);
+
+  const fotosExistentesSorted = useMemo(
+    () => [...fotosExistentes].sort((a, b) => a.ordem - b.ordem),
+    [fotosExistentes]
+  );
+  const armaPrincipalUrl =
+    fotosExistentesSorted[0]?.foto_url ?? fotoPreviews[0] ?? null;
+  const armaExtrasExistentes =
+    fotosExistentesSorted.length > 0 ? fotosExistentesSorted.slice(1) : [];
+  const armaExtrasPreviewsIndices =
+    fotosExistentesSorted.length > 0
+      ? fotoPreviews.map((url, i) => ({ url, i }))
+      : fotoPreviews.slice(1).map((url, j) => ({ url, i: j + 1 }));
+
+  const fileInputClass = `${inputClass} file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-zinc-700 file:px-4 file:py-2 file:text-sm file:font-medium file:text-zinc-100 hover:file:bg-zinc-600`;
 
   if (authLoading) {
     return (
@@ -1258,6 +1647,17 @@ export default function CadastrosPage() {
               }`}
             >
               Calibres
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("configuracoes")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium ${
+                activeTab === "configuracoes"
+                  ? "bg-zinc-100 text-zinc-900"
+                  : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+              }`}
+            >
+              Configurações
             </button>
           </div>
 
@@ -1459,23 +1859,120 @@ export default function CadastrosPage() {
             </section>
           )}
 
+          {activeTab === "configuracoes" && (
+            <section className="mb-6 rounded-lg border border-zinc-700/50 bg-zinc-900/30 p-4">
+              <h2 className="mb-1 text-lg font-semibold text-white">Configurações do catálogo</h2>
+              <p className="mb-4 text-sm text-zinc-400">
+                Os tributos são aplicados <strong className="text-zinc-300">em sequência</strong>: primeiro sobre o
+                custo da arma, o segundo sobre esse subtotal (não é apenas a soma dos percentuais de uma vez). O{" "}
+                <strong className="text-zinc-300">lucro (%)</strong> incide sobre o valor já com impostos. O preço
+                sugerido no cadastro usa arredondamento para baixo (regra especial para valores a partir de R$ 100).
+              </p>
+              <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
+                <div className="space-y-3 rounded-lg border border-zinc-700/60 bg-zinc-900/40 p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Primeira camada</p>
+                  <div>
+                    <label htmlFor="nome_imposto_simples" className={labelClass}>
+                      Nome exibido
+                    </label>
+                    <input
+                      id="nome_imposto_simples"
+                      type="text"
+                      value={tributacao.nomeSimples}
+                      onChange={(e) =>
+                        setTributacao((t) => ({ ...t, nomeSimples: e.target.value }))
+                      }
+                      className={inputClass}
+                      placeholder="Imposto Simples"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="pct_imposto_simples" className={labelClass}>
+                      Percentual (%)
+                    </label>
+                    <input
+                      id="pct_imposto_simples"
+                      type="text"
+                      inputMode="decimal"
+                      value={tributacao.pctSimplesStr}
+                      onChange={(e) =>
+                        setTributacao((t) => ({ ...t, pctSimplesStr: e.target.value }))
+                      }
+                      className={inputClass}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-3 rounded-lg border border-zinc-700/60 bg-zinc-900/40 p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Segunda camada</p>
+                  <div>
+                    <label htmlFor="nome_difal" className={labelClass}>
+                      Nome exibido
+                    </label>
+                    <input
+                      id="nome_difal"
+                      type="text"
+                      value={tributacao.nomeDifal}
+                      onChange={(e) =>
+                        setTributacao((t) => ({ ...t, nomeDifal: e.target.value }))
+                      }
+                      className={inputClass}
+                      placeholder="DIFAL"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="pct_difal" className={labelClass}>
+                      Percentual (%)
+                    </label>
+                    <input
+                      id="pct_difal"
+                      type="text"
+                      inputMode="decimal"
+                      value={tributacao.pctDifalStr}
+                      onChange={(e) =>
+                        setTributacao((t) => ({ ...t, pctDifalStr: e.target.value }))
+                      }
+                      className={inputClass}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={configSaving}
+                onClick={handleSalvarCatalogoConfig}
+                className="mt-4 rounded-lg px-4 py-2.5 text-sm font-medium text-zinc-900 disabled:opacity-50"
+                style={{ backgroundColor: "#E9B20E" }}
+              >
+                {configSaving ? "Salvando…" : "Salvar configuração de tributos"}
+              </button>
+            </section>
+          )}
+
           {/* Conteúdo da aba Armas */}
           {activeTab === "armas" && (
             <>
               {/* Filtros */}
-              <div className="mb-6 rounded-lg border border-zinc-700/50 bg-zinc-900/30 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">Filtros</h2>
-              {(filtroMarca || filtroCalibre || filtroNome) && (
-                <button
-                  onClick={limparFiltros}
-                  className="text-sm text-zinc-400 hover:text-zinc-300 transition-colors"
-                >
-                  Limpar filtros
-                </button>
-              )}
-            </div>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="mb-8 rounded-2xl border border-zinc-700/60 bg-zinc-900/40 p-5 shadow-inner sm:p-6">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-white">Filtros da lista</h2>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Refine por nome, marca ou calibre. A tabela abaixo reflete só o que passar pelos filtros.
+                    </p>
+                  </div>
+                  {(filtroMarca || filtroCalibre || filtroNome) && (
+                    <button
+                      type="button"
+                      onClick={limparFiltros}
+                      className="text-sm font-medium text-[#E9B20E] underline-offset-2 hover:underline"
+                    >
+                      Limpar filtros
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
               <div>
                 <label htmlFor="filtro-nome" className={labelClass}>
                   Nome
@@ -1527,180 +2024,458 @@ export default function CadastrosPage() {
               </div>
             </div>
             {(filtroMarca || filtroCalibre || filtroNome) && (
-              <div className="mt-3 text-sm text-zinc-400">
-                Mostrando {armasFiltradas.length} de {armas.length} armas
+              <div className="mt-5 rounded-xl border border-zinc-800/80 bg-zinc-950/40 px-4 py-3 text-sm text-zinc-400">
+                Mostrando <span className="font-medium text-zinc-200">{armasFiltradas.length}</span> de{" "}
+                <span className="text-zinc-300">{armas.length}</span> armas
+                {filtroArmasAtivo && armasFiltradas.length > 0 && (
+                  <span className="text-zinc-500">
+                    {" "}
+                    — use &quot;Selecionar todos&quot; abaixo para marcar os {armasFiltradas.length} itens visíveis.
+                  </span>
+                )}
               </div>
             )}
               </div>
 
+              {!loading && armas.length > 0 && (
+                <div className="mb-6 flex flex-col gap-4 rounded-2xl border border-zinc-700/60 bg-zinc-950/30 p-5 sm:flex-row sm:flex-wrap sm:items-end">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm text-zinc-400">
+                      {selectedArmaIds.size} selecionada(s)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedArmaIds(new Set(armasFiltradas.map((a) => a.id)))
+                      }
+                      disabled={armasFiltradas.length === 0}
+                      className="rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Selecionar{" "}
+                      {filtroArmasAtivo
+                        ? `todos os ${armasFiltradas.length} filtrados`
+                        : `todos (${armasFiltradas.length})`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedArmaIds(new Set())}
+                      disabled={selectedArmaIds.size === 0}
+                      className="rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Limpar seleção
+                    </button>
+                  </div>
+                  {selectedArmaIds.size > 0 ? (
+                    <div className="flex flex-wrap items-end gap-2 border-t border-zinc-700/60 pt-3 sm:border-l sm:border-t-0 sm:border-zinc-700/60 sm:pl-4 sm:pt-0">
+                      <div>
+                        <label htmlFor="bulk-margem" className={labelClass}>
+                          Novo % de lucro (sobre custo + impostos)
+                        </label>
+                        <input
+                          id="bulk-margem"
+                          type="text"
+                          inputMode="decimal"
+                          value={bulkMargemStr}
+                          onChange={(e) => setBulkMargemStr(e.target.value)}
+                          className={`${inputClass} w-36`}
+                          placeholder="ex.: 10"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={bulkMargemLoading}
+                        onClick={aplicarMargemEmMassa}
+                        className="rounded-lg px-4 py-2.5 text-sm font-medium text-zinc-900 disabled:opacity-50"
+                        style={{ backgroundColor: "#E9B20E" }}
+                      >
+                        {bulkMargemLoading ? "Aplicando…" : "Aplicar aos selecionados"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
               {loading ? (
-                <div className="text-center text-white">Carregando...</div>
+                <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/40 py-20 text-zinc-400">
+                  <div
+                    className="h-9 w-9 animate-spin rounded-full border-2 border-zinc-600 border-t-[#E9B20E]"
+                    aria-hidden
+                  />
+                  <p className="text-sm">Carregando armas…</p>
+                </div>
               ) : armas.length === 0 ? (
-                <div className="rounded-lg border border-zinc-700/50 bg-zinc-900/30 p-8 text-center">
+                <div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/30 px-6 py-16 text-center">
                   <p className="text-zinc-400">Nenhuma arma cadastrada ainda.</p>
+                  <p className="mt-2 text-sm text-zinc-600">
+                    Use o botão &quot;Nova arma&quot; acima para incluir o primeiro item.
+                  </p>
                 </div>
               ) : armasFiltradas.length === 0 ? (
-                <div className="rounded-lg border border-zinc-700/50 bg-zinc-900/30 p-8 text-center">
-                  <p className="text-zinc-400">
-                    Nenhuma arma encontrada com os filtros aplicados.
-                  </p>
+                <div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/30 px-6 py-16 text-center">
+                  <p className="text-zinc-400">Nenhuma arma encontrada com os filtros aplicados.</p>
                   <button
+                    type="button"
                     onClick={limparFiltros}
-                    className="mt-4 text-[#E9B20E] hover:underline"
+                    className="mt-4 text-sm font-medium text-[#E9B20E] underline-offset-2 hover:underline"
                   >
                     Limpar filtros
                   </button>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse rounded-lg border border-zinc-700/50 bg-zinc-900/30">
-                    <thead>
-                      <tr className="border-b border-zinc-700/50">
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">
-                          Foto
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">
-                          Nome
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">
-                          Categoria
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">
-                          Marca
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">
-                          Calibre
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">
-                          Preço
-                        </th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-zinc-300">
-                          Destaque
-                        </th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-zinc-300">
-                          Ações
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {armasFiltradas.map((arma) => (
-                        <tr
+                <>
+                  {/* Lista em cards — mobile / tablet */}
+                  <div className="space-y-4 lg:hidden">
+                    {armasFiltradas.map((arma) => {
+                      const capa = armaCapaUrl(arma);
+                      const extras = armaFotosExtrasCount(arma);
+                      return (
+                        <div
                           key={arma.id}
-                          className="border-b border-zinc-700/30 transition-colors hover:bg-zinc-800/30"
+                          className="relative overflow-hidden rounded-2xl border border-zinc-700/70 bg-gradient-to-b from-zinc-900/80 to-zinc-950/90 p-4 shadow-md shadow-black/20"
                         >
-                          <td className="px-4 py-3">
-                            {arma.fotos && arma.fotos.length > 0 ? (
-                              <div className="flex gap-1">
-                                {arma.fotos.slice(0, 3).map((foto) => (
-                                  <img
-                                    key={foto.id}
-                                    src={foto.foto_url}
-                                    alt={arma.nome || ""}
-                                    className="h-16 w-16 rounded object-cover"
-                                  />
-                                ))}
-                                {arma.fotos.length > 3 && (
-                                  <div className="flex h-16 w-16 items-center justify-center rounded bg-zinc-800 text-xs text-zinc-500">
-                                    +{arma.fotos.length - 3}
-                                  </div>
-                                )}
-                              </div>
-                            ) : arma.foto_url ? (
-                              <img
-                                src={arma.foto_url}
-                                alt={arma.nome || ""}
-                                className="h-16 w-16 rounded object-cover"
-                              />
-                            ) : (
-                              <div className="flex h-16 w-16 items-center justify-center rounded bg-zinc-800 text-xs text-zinc-500">
-                                Sem foto
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-white">
-                            {arma.nome || "-"}
-                          </td>
-                          <td className="px-4 py-3 text-zinc-300">
-                            {arma.categoria?.nome || "-"}
-                          </td>
-                          <td className="px-4 py-3 text-zinc-300">
-                            {arma.marca?.nome || "-"}
-                          </td>
-                          <td className="px-4 py-3 text-zinc-300">
-                            {arma.calibre?.nome || "-"}
-                          </td>
-                          <td className="px-4 py-3 text-zinc-300">
-                            {arma.preco
-                              ? `R$ ${arma.preco.toLocaleString("pt-BR", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}`
-                              : "-"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-center">
-                              {arma.em_destaque ? (
-                                <span
-                                  className="rounded-full px-2 py-1 text-xs font-medium"
-                                  style={{
-                                    backgroundColor: "rgba(233, 178, 14, 0.2)",
-                                    color: "#E9B20E",
-                                  }}
-                                >
-                                  ★ Destaque
-                                </span>
+                          <div className="absolute right-3 top-3 z-10">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-zinc-500 bg-zinc-900 text-[#E9B20E] focus:ring-[#E9B20E]"
+                              checked={selectedArmaIds.has(arma.id)}
+                              onChange={() => {
+                                setSelectedArmaIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(arma.id)) next.delete(arma.id);
+                                  else next.add(arma.id);
+                                  return next;
+                                });
+                              }}
+                              aria-label={`Selecionar ${arma.nome || "arma"}`}
+                            />
+                          </div>
+                          <div className="flex gap-4 pr-10">
+                            <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
+                              {capa ? (
+                                <img
+                                  src={capa}
+                                  alt=""
+                                  className="h-full w-full object-cover"
+                                />
                               ) : (
-                                <span className="text-xs text-zinc-500">-</span>
+                                <div className="flex h-full w-full items-center justify-center text-[10px] text-zinc-600">
+                                  Sem foto
+                                </div>
                               )}
+                              {extras > 0 ? (
+                                <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-zinc-200">
+                                  +{extras}
+                                </span>
+                              ) : null}
+                              {arma.em_promocao ? (
+                                <span className="absolute left-1 top-1 rounded bg-rose-600/90 px-1.5 py-0.5 text-[9px] font-bold uppercase text-white">
+                                  Promo
+                                </span>
+                              ) : null}
                             </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-center gap-2">
-                              <button
-                                onClick={() => openEditModal(arma)}
-                                className="rounded-lg p-2 text-[#E9B20E] transition-colors hover:bg-zinc-800"
-                                title="Editar"
-                              >
-                                <svg
-                                  className="h-5 w-5"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                  strokeWidth={2}
+                            <div className="min-w-0 flex-1">
+                              <h3 className="line-clamp-2 pr-2 text-base font-semibold leading-snug text-white">
+                                {arma.nome || "—"}
+                              </h3>
+                              <p className="mt-1 line-clamp-2 text-xs text-zinc-500">
+                                {[arma.categoria?.nome, arma.marca?.nome, arma.calibre?.nome]
+                                  .filter(Boolean)
+                                  .join(" · ") || "—"}
+                              </p>
+                              <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-semibold tabular-nums text-[#E9B20E]">
+                                  {arma.preco != null
+                                    ? `R$ ${arma.preco.toLocaleString("pt-BR", {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}`
+                                    : "—"}
+                                </span>
+                                {arma.margem_venda_percent != null &&
+                                Number.isFinite(Number(arma.margem_venda_percent)) ? (
+                                  <button
+                                    type="button"
+                                    title="Editar (custo e % de lucro)"
+                                    onClick={() => openEditModal(arma)}
+                                    className="inline-flex rounded-full border border-zinc-600 bg-zinc-800/80 px-2 py-0.5 text-[11px] font-semibold text-[#E9B20E] hover:border-[#E9B20E]/50"
+                                  >
+                                    {Number(arma.margem_venda_percent).toLocaleString("pt-BR", {
+                                      minimumFractionDigits: 0,
+                                      maximumFractionDigits: 2,
+                                    })}
+                                    %
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    title="Sem % — editar"
+                                    onClick={() => openEditModal(arma)}
+                                    className="rounded-full border border-dashed border-zinc-600 px-2 py-0.5 text-[11px] text-zinc-500"
+                                  >
+                                    % —
+                                  </button>
+                                )}
+                                {arma.em_destaque ? (
+                                  <span
+                                    className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                                    style={{
+                                      backgroundColor: "rgba(233, 178, 14, 0.2)",
+                                      color: "#E9B20E",
+                                    }}
+                                  >
+                                    ★ Destaque
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-3 flex gap-2 border-t border-zinc-800/80 pt-3">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(arma)}
+                                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-600 py-2 text-sm font-medium text-[#E9B20E] hover:bg-zinc-800/80"
                                 >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                                  />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => setDeleteConfirm(arma.id)}
-                                className="rounded-lg p-2 text-red-400 transition-colors hover:bg-zinc-800"
-                                title="Excluir"
-                              >
-                                <svg
-                                  className="h-5 w-5"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                  strokeWidth={2}
+                                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
+                                  Editar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteConfirm(arma.id)}
+                                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-red-900/40 py-2 text-sm font-medium text-red-400 hover:bg-red-950/30"
                                 >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                                  />
-                                </svg>
-                              </button>
+                                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                  Excluir
+                                </button>
+                              </div>
                             </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Tabela — desktop */}
+                  <div className="hidden overflow-hidden rounded-2xl border border-zinc-700/60 bg-zinc-950/40 shadow-inner lg:block">
+                    <div className="max-h-[min(70vh,52rem)] overflow-auto">
+                      <table className="w-full min-w-[860px] border-collapse text-left">
+                        <thead className="sticky top-0 z-10 border-b border-zinc-700/80 bg-zinc-950/95 backdrop-blur-sm">
+                          <tr>
+                            <th className="w-12 px-3 py-3.5 text-center">
+                              <input
+                                ref={headerSelectRef}
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-zinc-500 bg-zinc-900 text-[#E9B20E] focus:ring-[#E9B20E]"
+                                checked={
+                                  armasFiltradas.length > 0 &&
+                                  selectedVisibleCount === armasFiltradas.length
+                                }
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setSelectedArmaIds((prev) => {
+                                    const next = new Set(prev);
+                                    const ids = armasFiltradas.map((a) => a.id);
+                                    if (checked) ids.forEach((id) => next.add(id));
+                                    else ids.forEach((id) => next.delete(id));
+                                    return next;
+                                  });
+                                }}
+                                title="Selecionar ou limpar todas as linhas visíveis (respeita filtros)"
+                              />
+                            </th>
+                            <th className="w-[88px] px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Capa
+                            </th>
+                            <th className="min-w-[200px] px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Produto
+                            </th>
+                            <th className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Categoria
+                            </th>
+                            <th className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Marca
+                            </th>
+                            <th className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Calibre
+                            </th>
+                            <th className="px-3 py-3.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Preço
+                            </th>
+                            <th className="w-24 px-3 py-3.5 text-center text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              % Lucro
+                            </th>
+                            <th className="w-28 px-3 py-3.5 text-center text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Destaque
+                            </th>
+                            <th className="w-[100px] px-3 py-3.5 text-center text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                              Ações
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {armasFiltradas.map((arma) => {
+                            const capa = armaCapaUrl(arma);
+                            const extras = armaFotosExtrasCount(arma);
+                            return (
+                              <tr
+                                key={arma.id}
+                                className="border-b border-zinc-800/80 transition-colors hover:bg-zinc-800/25"
+                              >
+                                <td className="px-3 py-3 align-middle text-center">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-zinc-500 bg-zinc-900 text-[#E9B20E] focus:ring-[#E9B20E]"
+                                    checked={selectedArmaIds.has(arma.id)}
+                                    onChange={() => {
+                                      setSelectedArmaIds((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(arma.id)) next.delete(arma.id);
+                                        else next.add(arma.id);
+                                        return next;
+                                      });
+                                    }}
+                                    aria-label={`Selecionar ${arma.nome || "arma"}`}
+                                  />
+                                </td>
+                                <td className="px-3 py-3 align-middle">
+                                  <div className="relative h-14 w-14 overflow-hidden rounded-lg bg-zinc-900 ring-1 ring-zinc-800">
+                                    {capa ? (
+                                      <img src={capa} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <div className="flex h-full w-full items-center justify-center text-[9px] text-zinc-600">
+                                        —
+                                      </div>
+                                    )}
+                                    {extras > 0 ? (
+                                      <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium text-zinc-200">
+                                        +{extras}
+                                      </span>
+                                    ) : null}
+                                    {arma.em_promocao ? (
+                                      <span className="absolute left-0.5 top-0.5 rounded bg-rose-600/90 px-1 text-[8px] font-bold uppercase leading-none text-white">
+                                        P
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-3 align-middle">
+                                  <span className="line-clamp-2 font-medium text-zinc-100">{arma.nome || "—"}</span>
+                                </td>
+                                <td className="max-w-[140px] px-3 py-3 align-middle">
+                                  <span className="line-clamp-2 text-sm text-zinc-400">
+                                    {arma.categoria?.nome || "—"}
+                                  </span>
+                                </td>
+                                <td className="max-w-[120px] px-3 py-3 align-middle">
+                                  <span className="line-clamp-2 text-sm text-zinc-400">{arma.marca?.nome || "—"}</span>
+                                </td>
+                                <td className="max-w-[120px] px-3 py-3 align-middle">
+                                  <span className="line-clamp-2 text-sm text-zinc-400">{arma.calibre?.nome || "—"}</span>
+                                </td>
+                                <td className="px-3 py-3 align-middle">
+                                  <span className="text-sm font-semibold tabular-nums text-[#E9B20E]">
+                                    {arma.preco != null
+                                      ? `R$ ${arma.preco.toLocaleString("pt-BR", {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2,
+                                        })}`
+                                      : "—"}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-3 align-middle text-center">
+                                  {arma.margem_venda_percent != null &&
+                                  Number.isFinite(Number(arma.margem_venda_percent)) ? (
+                                    <button
+                                      type="button"
+                                      title="Editar produto (custo e % de lucro no formulário)"
+                                      onClick={() => openEditModal(arma)}
+                                      className="inline-flex min-w-[3.25rem] justify-center rounded-full border border-zinc-600 bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-[#E9B20E] transition-colors hover:border-[#E9B20E]/60 hover:bg-zinc-700"
+                                    >
+                                      {Number(arma.margem_venda_percent).toLocaleString("pt-BR", {
+                                        minimumFractionDigits: 0,
+                                        maximumFractionDigits: 4,
+                                      })}
+                                      %
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      title="Sem % cadastrado — clique para editar"
+                                      onClick={() => openEditModal(arma)}
+                                      className="rounded-full border border-dashed border-zinc-600 px-2.5 py-1 text-xs text-zinc-500 transition-colors hover:border-zinc-500 hover:text-zinc-400"
+                                    >
+                                      —
+                                    </button>
+                                  )}
+                                </td>
+                                <td className="px-3 py-3 align-middle text-center">
+                                  {arma.em_destaque ? (
+                                    <span
+                                      className="inline-flex rounded-full px-2 py-1 text-[11px] font-medium"
+                                      style={{
+                                        backgroundColor: "rgba(233, 178, 14, 0.2)",
+                                        color: "#E9B20E",
+                                      }}
+                                    >
+                                      ★ Sim
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-zinc-600">—</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-3 align-middle">
+                                  <div className="flex items-center justify-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => openEditModal(arma)}
+                                      className="rounded-lg p-2 text-[#E9B20E] transition-colors hover:bg-zinc-800"
+                                      title="Editar"
+                                    >
+                                      <svg
+                                        className="h-5 w-5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                        strokeWidth={2}
+                                      >
+                                        <path
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                        />
+                                      </svg>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeleteConfirm(arma.id)}
+                                      className="rounded-lg p-2 text-red-400 transition-colors hover:bg-zinc-800"
+                                      title="Excluir"
+                                    >
+                                      <svg
+                                        className="h-5 w-5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                        strokeWidth={2}
+                                      >
+                                        <path
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                        />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
               )}
             </>
           )}
@@ -1710,20 +2485,31 @@ export default function CadastrosPage() {
       {/* Modal de Cadastro/Edição */}
       {showModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-[2px]"
           onClick={closeModal}
         >
           <div
-            className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-6 shadow-xl"
+            className="relative w-full max-w-6xl max-h-[92vh] overflow-y-auto rounded-2xl border border-zinc-600/60 bg-gradient-to-b from-zinc-900 to-zinc-950 p-8 shadow-2xl shadow-black/40"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-white">
-                {editingId ? "Editar Arma" : "Nova Arma"}
-              </h2>
+            <div className="mb-8 flex items-start justify-between gap-4 border-b border-zinc-800 pb-6">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-[#E9B20E]/90">
+                  Catálogo
+                </p>
+                <h2 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
+                  {editingId ? "Editar arma" : "Nova arma"}
+                </h2>
+                <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+                  Preencha os blocos abaixo. A imagem em destaque é a <span className="text-zinc-200">foto principal</span>{" "}
+                  (capa do produto); fotos extras ficam na faixa menor embaixo.
+                </p>
+              </div>
               <button
+                type="button"
                 onClick={closeModal}
-                className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                className="shrink-0 rounded-xl p-2.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                aria-label="Fechar"
               >
                 <svg
                   className="h-6 w-6"
@@ -1741,179 +2527,368 @@ export default function CadastrosPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-10">
               {/* Dados gerais */}
-              <section className="rounded-xl border border-zinc-700/50 bg-zinc-900/30 p-6">
-                <h3 className="mb-4 text-lg font-semibold text-white">
-                  Dados gerais
-                </h3>
-                <div className="space-y-4">
-                  <div>
-                    <label htmlFor="categoria_id" className={labelClass}>
-                      Categoria
-                    </label>
-                    <select
-                      id="categoria_id"
-                      name="categoria_id"
-                      value={form.categoria_id}
-                      onChange={handleChange}
-                      className={inputClass}
-                    >
-                      <option value="">Selecione</option>
-                      {categorias.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.nome}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="nome" className={labelClass}>
-                      Nome
-                    </label>
-                    <input
-                      id="nome"
-                      name="nome"
-                      type="text"
-                      value={form.nome}
-                      onChange={handleChange}
-                      className={inputClass}
-                      placeholder="Nome da arma"
-                    />
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <input
-                      id="comVariacao"
-                      type="checkbox"
-                      checked={comVariacao}
-                      onChange={(e) => {
-                        setComVariacao(e.target.checked);
-                        if (!e.target.checked) setVariacoes([]);
-                        else if (variacoes.length === 0) addVariacao();
-                      }}
-                      className="h-5 w-5 rounded border-zinc-600 bg-zinc-800/50 text-[#E9B20E] focus:ring-1 focus:ring-[#E9B20E]"
-                    />
-                    <label htmlFor="comVariacao" className="text-sm font-medium text-zinc-300 cursor-pointer">
-                      Produto com variação (calibre, tamanho de cano e valor por opção)
-                    </label>
-                  </div>
-                  <div>
-                    <label htmlFor="foto" className={labelClass}>
-                      Fotos da arma {!comVariacao && editingId && "(adicione novas fotos)"}
-                      {comVariacao && " (fotos gerais; use a seção Variações para fotos por cano)"}
-                    </label>
-                    <input
-                      id="foto"
-                      name="foto"
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={handleFotoChange}
-                      className={inputClass}
-                    />
-                    
-                    {/* Fotos existentes (apenas na edição) */}
-                    {editingId && fotosExistentes.length > 0 && (
-                      <div className="mt-4">
-                        <p className="mb-2 text-sm text-zinc-400">
-                          Fotos existentes (a primeira será exibida como capa):
+              <section className="rounded-2xl border border-zinc-700/50 bg-zinc-900/40 p-8 shadow-inner">
+                <h3 className="mb-2 text-lg font-semibold text-white">Dados gerais</h3>
+                <p className="mb-8 text-sm text-zinc-500">
+                  Identificação do produto e imagem de capa. Você pode enviar várias imagens; só a principal aparece em destaque.
+                </p>
+
+                <div className="space-y-10">
+                  <div className="grid gap-8 lg:grid-cols-2">
+                    <div className="space-y-6">
+                      <div>
+                        <label htmlFor="categoria_id" className={labelClass}>
+                          Categoria
+                        </label>
+                        <select
+                          id="categoria_id"
+                          name="categoria_id"
+                          value={form.categoria_id}
+                          onChange={handleChange}
+                          className={inputClass}
+                        >
+                          <option value="">Selecione</option>
+                          {categorias.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.nome}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="nome" className={labelClass}>
+                          Nome
+                        </label>
+                        <input
+                          id="nome"
+                          name="nome"
+                          type="text"
+                          value={form.nome}
+                          onChange={handleChange}
+                          className={inputClass}
+                          placeholder="Nome da arma"
+                        />
+                      </div>
+                      <div className="rounded-xl border border-zinc-700/40 bg-zinc-950/50 p-4">
+                        <div className="flex items-start gap-3">
+                          <input
+                            id="comVariacao"
+                            type="checkbox"
+                            checked={comVariacao}
+                            onChange={(e) => {
+                              setComVariacao(e.target.checked);
+                              if (!e.target.checked) setVariacoes([]);
+                              else if (variacoes.length === 0) addVariacao();
+                            }}
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-zinc-600 bg-zinc-800/50 text-[#E9B20E] focus:ring-1 focus:ring-[#E9B20E]"
+                          />
+                          <label htmlFor="comVariacao" className="cursor-pointer text-sm leading-relaxed text-zinc-300">
+                            <span className="font-medium text-zinc-200">Produto com variação</span> — calibre, tamanho de
+                            cano e preço por opção. Com isso ativo, use a seção Variações para fotos por cano.
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Foto principal + extras */}
+                    <div className="space-y-5">
+                      <div>
+                        <span className={labelClass}>Foto principal (capa)</span>
+                        <p className="mb-3 text-xs text-zinc-500">
+                          {!comVariacao && editingId && "Inclua novas imagens abaixo; a capa continua sendo a primeira da lista."}
+                          {comVariacao &&
+                            "Imagens gerais do produto; fotos específicas de cada cano ficam em Variações."}
                         </p>
-                        <div className="grid grid-cols-3 gap-4">
-                          {fotosExistentes
-                            .sort((a, b) => a.ordem - b.ordem)
-                            .map((foto, index) => (
-                            <div key={foto.id} className="relative">
-                              <img
-                                src={foto.foto_url}
-                                alt={`Foto ${foto.ordem + 1}`}
-                                className={`h-24 w-full rounded object-cover ${index === 0 ? 'ring-2 ring-[#E9B20E]' : ''}`}
-                              />
-                              {index === 0 && (
-                                <div className="absolute left-1 top-1 rounded bg-[#E9B20E] px-2 py-0.5 text-xs font-bold text-zinc-900">
-                                  CAPA
-                                </div>
-                              )}
-                              <div className="absolute right-1 top-1 flex flex-col gap-1">
-                                {index !== 0 && (
+                        <div className="relative overflow-hidden rounded-2xl border border-zinc-600/70 bg-zinc-950 ring-1 ring-black/20">
+                          {armaPrincipalUrl ? (
+                            <>
+                              <div className="aspect-[4/3] w-full max-h-[min(280px,40vh)] sm:max-h-[320px]">
+                                <img
+                                  src={armaPrincipalUrl}
+                                  alt="Foto principal do produto"
+                                  className="h-full w-full object-contain bg-zinc-950"
+                                />
+                              </div>
+                              <div className="absolute left-3 top-3 rounded-md bg-[#E9B20E] px-2.5 py-1 text-xs font-bold text-zinc-900 shadow">
+                                Principal
+                              </div>
+                              <div className="absolute bottom-3 right-3 flex gap-2">
+                                {fotosExistentesSorted[0] ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFotoExistente(fotosExistentesSorted[0].id)}
+                                    className="rounded-lg bg-red-600/90 px-3 py-1.5 text-xs font-medium text-white shadow hover:bg-red-500"
+                                  >
+                                    Remover capa
+                                  </button>
+                                ) : fotoPreviews.length > 0 ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFoto(0)}
+                                    className="rounded-lg bg-red-600/90 px-3 py-1.5 text-xs font-medium text-white shadow hover:bg-red-500"
+                                  >
+                                    Remover
+                                  </button>
+                                ) : null}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex aspect-[4/3] max-h-[min(220px,35vh)] w-full flex-col items-center justify-center gap-2 border-2 border-dashed border-zinc-700 bg-zinc-900/50 p-6 text-center sm:max-h-[280px]">
+                              <svg
+                                className="h-10 w-10 text-zinc-600"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={1.5}
+                                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                />
+                              </svg>
+                              <p className="text-sm text-zinc-500">Nenhuma imagem ainda</p>
+                              <p className="text-xs text-zinc-600">Envie arquivos abaixo — a primeira vira a capa</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label htmlFor="foto" className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                          Adicionar imagens
+                        </label>
+                        <input
+                          id="foto"
+                          name="foto"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={handleFotoChange}
+                          className={`mt-2 ${fileInputClass}`}
+                        />
+                      </div>
+
+                      {(armaExtrasExistentes.length > 0 || armaExtrasPreviewsIndices.length > 0) && (
+                        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+                          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                            Outras fotos ({armaExtrasExistentes.length + armaExtrasPreviewsIndices.length})
+                          </p>
+                          <div className="flex flex-wrap gap-3">
+                            {armaExtrasExistentes.map((foto) => (
+                              <div key={foto.id} className="group relative w-[4.5rem] shrink-0">
+                                <img
+                                  src={foto.foto_url}
+                                  alt=""
+                                  className="aspect-square w-full rounded-lg border border-zinc-700 object-cover"
+                                />
+                                <div className="absolute inset-0 flex items-start justify-end gap-0.5 rounded-lg bg-black/30 p-1 sm:bg-black/0 sm:opacity-0 sm:transition-opacity sm:group-hover:bg-black/40 sm:group-hover:opacity-100">
                                   <button
                                     type="button"
                                     onClick={() => definirFotoExistenteComoCapa(foto.id)}
-                                    className="rounded-full bg-[#E9B20E] p-1 text-white hover:bg-[#D4A00D]"
-                                    title="Definir como capa"
+                                    className="rounded-md bg-[#E9B20E] p-1 text-zinc-900 shadow hover:bg-[#D4A00D]"
+                                    title="Tornar principal"
                                   >
                                     <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
                                       <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                                     </svg>
                                   </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => removeFotoExistente(foto.id)}
-                                  className="rounded-full bg-red-500 p-1 text-white hover:bg-red-600"
-                                  title="Remover foto"
-                                >
-                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Preview das fotos selecionadas */}
-                    {fotoPreviews.length > 0 && (
-                      <div className="mt-4">
-                        <p className="mb-2 text-sm text-zinc-400">
-                          Novas fotos selecionadas (a primeira será exibida como capa):
-                        </p>
-                        <div className="grid grid-cols-3 gap-4">
-                          {fotoPreviews.map((preview, index) => (
-                            <div key={index} className="relative">
-                              <img
-                                src={preview}
-                                alt={`Preview ${index + 1}`}
-                                className={`h-24 w-full rounded object-cover ${index === 0 ? 'ring-2 ring-[#E9B20E]' : ''}`}
-                              />
-                              {index === 0 && (
-                                <div className="absolute left-1 top-1 rounded bg-[#E9B20E] px-2 py-0.5 text-xs font-bold text-zinc-900">
-                                  CAPA
-                                </div>
-                              )}
-                              <div className="absolute right-1 top-1 flex flex-col gap-1">
-                                {index !== 0 && (
                                   <button
                                     type="button"
-                                    onClick={() => definirFotoNovaComoCapa(index)}
-                                    className="rounded-full bg-[#E9B20E] p-1 text-white hover:bg-[#D4A00D]"
-                                    title="Definir como capa"
+                                    onClick={() => removeFotoExistente(foto.id)}
+                                    className="rounded-md bg-red-600 p-1 text-white hover:bg-red-500"
+                                    title="Remover"
+                                  >
+                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                            {armaExtrasPreviewsIndices.map(({ url, i }) => (
+                              <div key={`p-${i}`} className="group relative w-[4.5rem] shrink-0">
+                                <img
+                                  src={url}
+                                  alt=""
+                                  className="aspect-square w-full rounded-lg border border-zinc-700 object-cover"
+                                />
+                                <div className="absolute inset-0 flex items-start justify-end gap-0.5 rounded-lg bg-black/30 p-1 sm:bg-black/0 sm:opacity-0 sm:transition-opacity sm:group-hover:bg-black/40 sm:group-hover:opacity-100">
+                                  <button
+                                    type="button"
+                                    onClick={() => definirFotoNovaComoCapa(i)}
+                                    className="rounded-md bg-[#E9B20E] p-1 text-zinc-900 shadow hover:bg-[#D4A00D]"
+                                    title="Tornar principal"
                                   >
                                     <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
                                       <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                                     </svg>
                                   </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => removeFoto(index)}
-                                  className="rounded-full bg-red-500 p-1 text-white hover:bg-red-600"
-                                  title="Remover foto"
-                                >
-                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFoto(i)}
+                                    className="rounded-md bg-red-600 p-1 text-white hover:bg-red-500"
+                                    title="Remover"
+                                  >
+                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
+                          <p className="mt-3 text-xs text-zinc-600">
+                            Passe o mouse nos quadradinhos para trocar a capa ou excluir. A primeira foto da lista é a que aparece no catálogo.
+                          </p>
                         </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-zinc-600/80 bg-zinc-800/20 p-6 space-y-4">
+                    <p className="text-sm font-medium text-zinc-200">Custo, impostos e lucro</p>
+                    <p className="text-xs text-zinc-500">
+                      Impostos da aba Configurações: primeiro{" "}
+                      <span className="text-zinc-300">
+                        {tributacao.nomeSimples} ({pctSimplesModal.toLocaleString("pt-BR")}%)
+                      </span>{" "}
+                      sobre o custo; depois{" "}
+                      <span className="text-zinc-300">
+                        {tributacao.nomeDifal} ({pctDifalModal.toLocaleString("pt-BR")}%)
+                      </span>{" "}
+                      sobre esse subtotal. O lucro (%) incide sobre <strong className="text-zinc-300">custo + impostos</strong>
+                      . Para preço sugerido ≥ R$ 100, arredonda para baixo na dezena de reais e ajusta para terminar em
+                      ,90 (ex.: 8.778,21 → 8.769,90); abaixo de R$ 100, piso ao centavo.
+                      {comVariacao && (
+                        <>
+                          {" "}
+                          Com <strong className="text-zinc-300">variações</strong>, cada opção pode ter{" "}
+                          <strong className="text-zinc-300">custo próprio</strong> no cartão abaixo; o % de lucro deste bloco é o mesmo para todas.
+                        </>
+                      )}
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="preco_custo" className={labelClass}>
+                          Preço de custo (R$) {comVariacao && <span className="font-normal text-zinc-500">— geral da arma</span>}
+                        </label>
+                        <input
+                          id="preco_custo"
+                          name="preco_custo"
+                          type="text"
+                          inputMode="decimal"
+                          value={form.preco_custo}
+                          onChange={handleChange}
+                          className={inputClass}
+                          placeholder="0,00"
+                        />
                       </div>
-                    )}
+                      <div>
+                        <label htmlFor="margem_venda_percent" className={labelClass}>
+                          % de lucro sobre custo + impostos
+                        </label>
+                        <input
+                          id="margem_venda_percent"
+                          name="margem_venda_percent"
+                          type="text"
+                          inputMode="decimal"
+                          value={form.margem_venda_percent}
+                          onChange={handleChange}
+                          className={inputClass}
+                          placeholder="ex.: 8"
+                        />
+                      </div>
+                    </div>
+                    {mostrarBlocoPrecificacao ? (
+                      <div className="space-y-2 rounded-md border border-zinc-600/60 bg-zinc-900/40 px-3 py-3">
+                        {precificacaoModal != null ? (
+                          <>
+                            <p className="text-xs text-zinc-500">
+                              Custo + impostos (sequencial):{" "}
+                              <span className="font-medium text-zinc-200">
+                                R${" "}
+                                {precificacaoModal.custoComImpostos.toLocaleString("pt-BR", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </span>
+                            </p>
+                            <p className="text-xs text-zinc-500">
+                              Com lucro (valor bruto):{" "}
+                              <span className="font-medium text-zinc-200">
+                                R${" "}
+                                {precificacaoModal.valorBrutoComLucro.toLocaleString("pt-BR", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </span>
+                            </p>
+                            <div className="flex flex-col gap-2 border-t border-zinc-700/80 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="text-sm text-zinc-300">
+                                Preço sugerido (arred., custo geral):{" "}
+                                <span className="font-semibold text-[#E9B20E]">
+                                  R${" "}
+                                  {precificacaoModal.precoSugerido.toLocaleString("pt-BR", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </span>
+                              </p>
+                              {!comVariacao ? (
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-900"
+                                    style={{ backgroundColor: "#E9B20E" }}
+                                    onClick={() =>
+                                      setForm((p) => ({
+                                        ...p,
+                                        preco: precificacaoModal.precoSugerido.toLocaleString("pt-BR", {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2,
+                                        }),
+                                      }))
+                                    }
+                                  >
+                                    Aplicar ao preço de venda
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-xs text-zinc-500">
+                            Informe o <strong className="text-zinc-300">% de lucro</strong> acima. Para ver o resumo com números (custo geral), preencha também o custo geral. Cada variação pode ter custo próprio nos cartões abaixo; na falta de custo na variação, usa-se o custo geral.
+                          </p>
+                        )}
+                        {comVariacao && podeUsarMargemVariacoes ? (
+                          <div className="flex flex-wrap gap-2 border-t border-zinc-700/80 pt-2">
+                            <button
+                              type="button"
+                              className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-900"
+                              style={{ backgroundColor: "#E9B20E" }}
+                              onClick={() => {
+                                setVariacoes((prev) =>
+                                  prev.map((v) => {
+                                    const sug = precoSugeridoParaVariacao(v);
+                                    if (sug == null) return v;
+                                    return { ...v, preco: formatPrecoBr(sug) };
+                                  })
+                                );
+                              }}
+                            >
+                              Aplicar sugerido em todas as variações
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                   {!comVariacao && (
-                    <div>
+                    <div className="rounded-xl border border-zinc-700/40 bg-zinc-950/30 p-5">
                       <label htmlFor="preco" className={labelClass}>
                         Preço (R$)
                       </label>
@@ -1928,55 +2903,171 @@ export default function CadastrosPage() {
                       />
                     </div>
                   )}
-                  <div className="flex items-center gap-3">
-                    <input
-                      id="em_destaque"
-                      name="em_destaque"
-                      type="checkbox"
-                      checked={form.em_destaque}
-                      onChange={handleChange}
-                      className="h-5 w-5 rounded border-zinc-600 bg-zinc-800/50 text-[#E9B20E] focus:ring-1 focus:ring-[#E9B20E]"
-                    />
-                    <label htmlFor="em_destaque" className="text-sm font-medium text-zinc-300 cursor-pointer">
-                      Marcar como destaque
-                    </label>
+                  <div className="rounded-xl border border-zinc-700/40 bg-zinc-950/25 p-5">
+                    <div className="flex items-center gap-3">
+                      <input
+                        id="em_destaque"
+                        name="em_destaque"
+                        type="checkbox"
+                        checked={form.em_destaque}
+                        onChange={handleChange}
+                        className="h-5 w-5 rounded border-zinc-600 bg-zinc-800/50 text-[#E9B20E] focus:ring-1 focus:ring-[#E9B20E]"
+                      />
+                      <label htmlFor="em_destaque" className="cursor-pointer text-sm font-medium text-zinc-300">
+                        Marcar como destaque
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-zinc-600/80 bg-zinc-800/20 p-6 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <input
+                        id="em_promocao"
+                        name="em_promocao"
+                        type="checkbox"
+                        checked={form.em_promocao}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setForm((prev) => ({
+                            ...prev,
+                            em_promocao: checked,
+                            ...(!checked ? { destaque_promocao: false } : {}),
+                          }));
+                          setMessage(null);
+                        }}
+                        className="h-5 w-5 rounded border-zinc-600 bg-zinc-800/50 text-[#E9B20E] focus:ring-1 focus:ring-[#E9B20E]"
+                      />
+                      <label htmlFor="em_promocao" className="text-sm font-medium text-zinc-300 cursor-pointer">
+                        Promoção ativa
+                      </label>
+                    </div>
+                    {form.em_promocao && (
+                      <>
+                        <div>
+                          <label htmlFor="preco_promocional" className={labelClass}>
+                            Preço promocional (R$)
+                          </label>
+                          <input
+                            id="preco_promocional"
+                            name="preco_promocional"
+                            type="text"
+                            value={form.preco_promocional}
+                            onChange={handleChange}
+                            className={inputClass}
+                            placeholder="0,00"
+                          />
+                        </div>
+                        <fieldset className="space-y-2">
+                          <legend className={`${labelClass} mb-2`}>Condição da promoção</legend>
+                          <div className="flex flex-wrap gap-4">
+                            <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+                              <input
+                                type="radio"
+                                name="promocao_modo"
+                                value="avista"
+                                checked={form.promocao_modo === "avista"}
+                                onChange={handleChange}
+                                className="h-4 w-4 border-zinc-600 text-[#E9B20E] focus:ring-[#E9B20E]"
+                              />
+                              À vista
+                            </label>
+                            <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+                              <input
+                                type="radio"
+                                name="promocao_modo"
+                                value="parcelado"
+                                checked={form.promocao_modo === "parcelado"}
+                                onChange={handleChange}
+                                className="h-4 w-4 border-zinc-600 text-[#E9B20E] focus:ring-[#E9B20E]"
+                              />
+                              Parcela em até X vezes
+                            </label>
+                          </div>
+                        </fieldset>
+                        {form.promocao_modo === "parcelado" && (
+                          <div>
+                            <label htmlFor="promocao_parcelas_max" className={labelClass}>
+                              Máximo de parcelas
+                            </label>
+                            <input
+                              id="promocao_parcelas_max"
+                              name="promocao_parcelas_max"
+                              type="number"
+                              min={2}
+                              max={48}
+                              value={form.promocao_parcelas_max}
+                              onChange={handleChange}
+                              className={inputClass}
+                            />
+                          </div>
+                        )}
+                        <div className="flex items-center gap-3">
+                          <input
+                            id="destaque_promocao"
+                            name="destaque_promocao"
+                            type="checkbox"
+                            checked={form.destaque_promocao}
+                            onChange={handleChange}
+                            disabled={!form.em_promocao}
+                            className="h-5 w-5 rounded border-zinc-600 bg-zinc-800/50 text-[#E9B20E] focus:ring-1 focus:ring-[#E9B20E] disabled:opacity-40"
+                          />
+                          <label htmlFor="destaque_promocao" className="text-sm font-medium text-zinc-300 cursor-pointer">
+                            Banner de promoção na página inicial (abaixo de Explorar catálogo)
+                          </label>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </section>
 
               {/* Variações (calibre + cano + preço + fotos por opção) */}
               {comVariacao && (
-                <section className="rounded-xl border border-zinc-700/50 bg-zinc-900/30 p-6">
-                  <div className="mb-4 flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-white">
-                      Variações (calibre, tamanho de cano, valor e acabamento)
-                    </h3>
+                <section className="rounded-2xl border border-zinc-700/50 bg-zinc-900/40 p-8 shadow-inner">
+                  <div className="mb-6 flex flex-col gap-4 border-b border-zinc-800 pb-6 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-white">Variações</h3>
+                      <p className="mt-1 text-sm text-zinc-500">
+                        Calibre, cano, valores e foto principal por opção.
+                      </p>
+                    </div>
                     <button
                       type="button"
                       onClick={addVariacao}
-                      className="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+                      className="shrink-0 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors"
                       style={{ backgroundColor: "#E9B20E", color: "#030711" }}
                     >
                       + Adicionar variação
                     </button>
                   </div>
-                  <div className="space-y-6">
-                    {variacoes.map((v, idx) => (
+                  <div className="space-y-8">
+                    {variacoes.map((v, idx) => {
+                      const vExSorted = [...(v.fotosExistentes || [])].sort((a, b) => a.ordem - b.ordem);
+                      const vPr = v.fotoPreviews || [];
+                      const vPrincipalUrl = vExSorted[0]?.foto_url ?? vPr[0] ?? null;
+                      const vExtrasEx = vExSorted.length > 0 ? vExSorted.slice(1) : [];
+                      const vExtrasPr =
+                        vExSorted.length > 0
+                          ? vPr.map((url, i) => ({ url, i }))
+                          : vPr.slice(1).map((url, j) => ({ url, i: j + 1 }));
+                      const vHasExtras = vExtrasEx.length > 0 || vExtrasPr.length > 0;
+
+                      return (
                       <div
                         key={idx}
-                        className="rounded-lg border border-zinc-600 bg-zinc-800/30 p-4"
+                        className="rounded-2xl border border-zinc-600/60 bg-zinc-950/40 p-6 shadow-sm"
                       >
-                        <div className="mb-3 flex items-center justify-between">
-                          <span className="text-sm font-medium text-zinc-400">Variação {idx + 1}</span>
+                        <div className="mb-6 flex items-center justify-between border-b border-zinc-800/80 pb-4">
+                          <span className="text-sm font-semibold text-zinc-200">Variação {idx + 1}</span>
                           <button
                             type="button"
                             onClick={() => removeVariacao(idx)}
-                            className="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-500/20"
+                            className="rounded-lg px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/15"
                           >
                             Remover
                           </button>
                         </div>
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
                           <div>
                             <label className={labelClass}>Calibre</label>
                             <select
@@ -2001,7 +3092,18 @@ export default function CadastrosPage() {
                             />
                           </div>
                           <div>
-                            <label className={labelClass}>Preço (R$)</label>
+                            <label className={labelClass}>Custo (R$) desta variação</label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={v.preco_custo}
+                              onChange={(e) => updateVariacao(idx, "preco_custo", e.target.value)}
+                              className={inputClass}
+                              placeholder="opcional"
+                            />
+                          </div>
+                          <div>
+                            <label className={labelClass}>Preço de venda (R$)</label>
                             <input
                               type="text"
                               value={v.preco}
@@ -2021,60 +3123,147 @@ export default function CadastrosPage() {
                             />
                           </div>
                         </div>
-                        <div className="mt-4">
-                          <label className={labelClass}>Fotos desta variação (tamanho de cano)</label>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={precoSugeridoParaVariacao(v) == null}
+                            title="Usa o custo desta linha (ou o custo geral) e o % de lucro do bloco Custo, impostos e lucro"
+                            className="rounded-lg border border-zinc-600 bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => {
+                              const sug = precoSugeridoParaVariacao(v);
+                              if (sug == null) return;
+                              updateVariacao(idx, "preco", formatPrecoBr(sug));
+                            }}
+                          >
+                            Aplicar sugerido
+                          </button>
+                          <button
+                            type="button"
+                            disabled={parsePreco(v.preco_custo) == null}
+                            title="Copia o custo desta variação para o campo de preço de venda (sem impostos nem lucro)"
+                            className="rounded-lg border border-zinc-600 bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => {
+                              const c = parsePreco(v.preco_custo);
+                              if (c == null) return;
+                              updateVariacao(idx, "preco", formatPrecoBr(c));
+                            }}
+                          >
+                            Preço = custo (variação)
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!String(form.preco_custo).trim()}
+                            title="Preenche o custo desta linha com o valor do custo geral da arma"
+                            className="rounded-lg border border-zinc-600 bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => updateVariacao(idx, "preco_custo", form.preco_custo)}
+                          >
+                            Usar custo geral
+                          </button>
+                        </div>
+                        <div className="mt-8 border-t border-zinc-800/80 pt-6">
+                          <label className={labelClass}>Foto principal desta variação</label>
+                          <p className="mb-3 text-xs text-zinc-500">
+                            A primeira imagem é a capa deste cano no catálogo. Outras ficam na faixa abaixo.
+                          </p>
+                          <div className="relative mb-4 overflow-hidden rounded-xl border border-zinc-600/70 bg-zinc-950">
+                            {vPrincipalUrl ? (
+                              <>
+                                <div className="aspect-[5/3] w-full max-h-[200px]">
+                                  <img
+                                    src={vPrincipalUrl}
+                                    alt=""
+                                    className="h-full w-full object-contain bg-zinc-950"
+                                  />
+                                </div>
+                                <div className="absolute left-2 top-2 rounded bg-[#E9B20E] px-2 py-0.5 text-[10px] font-bold uppercase text-zinc-900">
+                                  Principal
+                                </div>
+                                <div className="absolute bottom-2 right-2">
+                                  {vExSorted[0] ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeVariacaoFotoExistente(idx, vExSorted[0].id)}
+                                      className="rounded-lg bg-red-600/90 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-500"
+                                    >
+                                      Remover
+                                    </button>
+                                  ) : vPr.length > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeVariacaoFoto(idx, 0)}
+                                      className="rounded-lg bg-red-600/90 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-500"
+                                    >
+                                      Remover
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex aspect-[5/3] max-h-[160px] items-center justify-center border-2 border-dashed border-zinc-700 bg-zinc-900/40 p-4 text-center text-xs text-zinc-500">
+                                Sem foto — envie imagens abaixo
+                              </div>
+                            )}
+                          </div>
+                          <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                            Adicionar imagens
+                          </label>
                           <input
                             type="file"
                             accept="image/*"
                             multiple
                             onChange={(e) => handleVariacaoFotoChange(idx, e)}
-                            className={inputClass}
+                            className={`mt-2 ${fileInputClass}`}
                           />
-                          {v.fotosExistentes && v.fotosExistentes.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {v.fotosExistentes.map((f) => (
-                                <div key={f.id} className="relative">
-                                  <img src={f.foto_url} alt="" className="h-20 w-20 rounded object-cover" />
-                                  <button
-                                    type="button"
-                                    onClick={() => removeVariacaoFotoExistente(idx, f.id)}
-                                    className="absolute -right-1 -top-1 rounded-full bg-red-500 p-0.5 text-white"
-                                  >
-                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          {v.fotoPreviews && v.fotoPreviews.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {v.fotoPreviews.map((url, i) => (
-                                <div key={i} className="relative">
-                                  <img src={url} alt="" className="h-20 w-20 rounded object-cover" />
-                                  <button
-                                    type="button"
-                                    onClick={() => removeVariacaoFoto(idx, i)}
-                                    className="absolute -right-1 -top-1 rounded-full bg-red-500 p-0.5 text-white"
-                                  >
-                                    <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                                  </button>
-                                </div>
-                              ))}
+                          {vHasExtras && (
+                            <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+                              <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                                Outras fotos ({vExtrasEx.length + vExtrasPr.length})
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {vExtrasEx.map((f) => (
+                                  <div key={f.id} className="relative h-16 w-16 shrink-0">
+                                    <img src={f.foto_url} alt="" className="h-full w-full rounded-lg border border-zinc-700 object-cover" />
+                                    <button
+                                      type="button"
+                                      onClick={() => removeVariacaoFotoExistente(idx, f.id)}
+                                      className="absolute -right-1 -top-1 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500"
+                                      title="Remover"
+                                    >
+                                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                    </button>
+                                  </div>
+                                ))}
+                                {vExtrasPr.map(({ url, i }) => (
+                                  <div key={`pv-${i}`} className="relative h-16 w-16 shrink-0">
+                                    <img src={url} alt="" className="h-full w-full rounded-lg border border-zinc-700 object-cover" />
+                                    <button
+                                      type="button"
+                                      onClick={() => removeVariacaoFoto(idx, i)}
+                                      className="absolute -right-1 -top-1 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500"
+                                      title="Remover"
+                                    >
+                                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </section>
               )}
 
               {/* Especificações */}
-              <section className="rounded-xl border border-zinc-700/50 bg-zinc-900/30 p-6">
-                <h3 className="mb-4 text-lg font-semibold text-white">
-                  Especificações
-                </h3>
-                <div className="space-y-4">
+              <section className="rounded-2xl border border-zinc-700/50 bg-zinc-900/40 p-8 shadow-inner">
+                <h3 className="mb-2 text-lg font-semibold text-white">Especificações</h3>
+                <p className="mb-8 text-sm text-zinc-500">
+                  Dados técnicos exibidos na ficha do produto.
+                </p>
+                <div className="grid gap-6 sm:grid-cols-2">
                   <div>
                     <label htmlFor="calibre_id" className={labelClass}>
                       Calibre
@@ -2203,11 +3392,11 @@ export default function CadastrosPage() {
                 </div>
               )}
 
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse gap-3 border-t border-zinc-800 pt-8 sm:flex-row sm:gap-4">
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="flex-1 rounded-lg border-2 px-6 py-3 font-medium transition-colors"
+                  className="flex-1 rounded-xl border-2 px-6 py-3.5 text-sm font-medium transition-colors hover:bg-zinc-800/50 sm:text-base"
                   style={{
                     borderColor: "#E9B20E",
                     color: "#E9B20E",
@@ -2219,7 +3408,7 @@ export default function CadastrosPage() {
                 <button
                   type="submit"
                   disabled={submitLoading}
-                  className="flex-1 rounded-lg px-6 py-3 text-base font-bold text-zinc-900 transition-opacity disabled:opacity-50"
+                  className="flex-1 rounded-xl px-6 py-3.5 text-base font-bold text-zinc-900 shadow-lg shadow-[#E9B20E]/10 transition-opacity disabled:opacity-50"
                   style={{ backgroundColor: "#E9B20E" }}
                 >
                   {submitLoading

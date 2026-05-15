@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../../src/lib/supabaseClient";
 import type { CSSProperties } from "react";
 
+const CLIENT_DEMO_EMAIL = "cliente@gmail.com";
+const CLIENT_DEMO_PASSWORD = "Acessar123";
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -51,6 +54,12 @@ export default function LoginPage() {
 
     // Usar replace para evitar histórico de navegação indevido
     router.replace("/dashboard");
+  }
+
+  function useDemoCredentials() {
+    setError("");
+    setEmail(CLIENT_DEMO_EMAIL);
+    setPassword(CLIENT_DEMO_PASSWORD);
   }
 
   return (
@@ -112,6 +121,25 @@ export default function LoginPage() {
         <p style={styles.welcomeSubtitle}>
           Entre na sua conta para acessar o catálogo
         </p>
+        <p style={styles.clientDemoHint}>
+          Caso você seja um cliente, pode explorar nosso catálogo usando estas
+          credenciais:
+          <br />
+          <span style={styles.clientDemoCreds}>
+            email = {CLIENT_DEMO_EMAIL}
+          </span>
+          <br />
+          <span style={styles.clientDemoCreds}>
+            senha = {CLIENT_DEMO_PASSWORD}
+          </span>
+        </p>
+        <button
+          type="button"
+          onClick={useDemoCredentials}
+          style={styles.useDemoCredsButton}
+        >
+          Usar credenciais
+        </button>
 
         {/* EMAIL */}
         <div style={styles.inputWrapper}>
@@ -177,7 +205,31 @@ const styles: { [key: string]: CSSProperties } = {
     color: "#fff",
   },
   welcomeTitle: { fontSize: 24, fontWeight: 700 },
-  welcomeSubtitle: { color: "#9CA3AF", marginBottom: 24 },
+  welcomeSubtitle: { color: "#9CA3AF", marginBottom: 8 },
+  clientDemoHint: {
+    fontSize: 13,
+    lineHeight: 1.4,
+    color: "rgba(156, 163, 175, 0.95)",
+    margin: "0 0 10px 0",
+    textAlign: "center",
+  },
+  useDemoCredsButton: {
+    width: "100%",
+    padding: "9px 12px",
+    fontSize: 13,
+    fontWeight: 500,
+    color: "#E5E7EB",
+    background: "rgba(255, 255, 255, 0.08)",
+    border: "1px solid rgba(255, 255, 255, 0.22)",
+    borderRadius: 8,
+    cursor: "pointer",
+    margin: "0 0 18px 0",
+  },
+  clientDemoCreds: {
+    fontFamily: "ui-monospace, monospace",
+    fontSize: 12,
+    color: "rgba(209, 213, 219, 0.9)",
+  },
   inputWrapper: { marginBottom: 16 },
   label: { fontSize: 14 },
   input: {

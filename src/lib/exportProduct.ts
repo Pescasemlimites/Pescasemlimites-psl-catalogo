@@ -22,6 +22,205 @@ type Parcela = {
   comJuros: boolean;
 };
 
+const IMAGE_EXPORT_WIDTH = 1400;
+const IMAGE_EXPORT_HEIGHT = 720;
+const IMAGE_EXPORT_BG = '#0a0a0f';
+const IMAGE_EXPORT_ACCENT = '#ffcc00';
+
+function getProdutoEspecsItems(produto: ProdutoData) {
+  return [
+    produto.marca && { label: 'Marca', value: produto.marca.nome },
+    produto.calibre && { label: 'Calibre', value: produto.calibre.nome },
+    produto.funcionamento && { label: 'Funcionamento', value: produto.funcionamento.nome },
+    produto.espec_capacidade_tiros && { label: 'Capacidade de Tiros', value: produto.espec_capacidade_tiros },
+    produto.espec_carregadores && { label: 'Carregadores', value: produto.espec_carregadores },
+    produto.espec_comprimento_cano && { label: 'Comprimento do Cano', value: produto.espec_comprimento_cano },
+    produto.caracteristica_acabamento && { label: 'Acabamento', value: produto.caracteristica_acabamento },
+    produto.categoria && { label: 'Categoria', value: produto.categoria.nome },
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
+}
+
+/** DOM do card no formato paisagem: esquerda (logo, título, specs, preço) + direita (foto). */
+function buildProductImageExportDom(produto: ProdutoData, logoUrl: string): HTMLDivElement {
+  const container = document.createElement('div');
+  container.style.width = `${IMAGE_EXPORT_WIDTH}px`;
+  container.style.height = `${IMAGE_EXPORT_HEIGHT}px`;
+  container.style.padding = '36px 40px';
+  container.style.backgroundColor = IMAGE_EXPORT_BG;
+  container.style.color = '#ffffff';
+  container.style.fontFamily = 'Arial, Helvetica, sans-serif';
+  container.style.boxSizing = 'border-box';
+  container.style.display = 'flex';
+  container.style.flexDirection = 'column';
+  container.style.overflow = 'hidden';
+
+  const mainRow = document.createElement('div');
+  mainRow.style.display = 'flex';
+  mainRow.style.flexDirection = 'row';
+  mainRow.style.flex = '1';
+  mainRow.style.minHeight = '0';
+  mainRow.style.gap = '28px';
+
+  const left = document.createElement('div');
+  left.style.flex = '1';
+  left.style.minWidth = '0';
+  left.style.display = 'flex';
+  left.style.flexDirection = 'column';
+  left.style.gap = '18px';
+
+  const logoWrap = document.createElement('div');
+  logoWrap.style.display = 'flex';
+  logoWrap.style.justifyContent = 'flex-start';
+  const logoImg = document.createElement('img');
+  logoImg.src = logoUrl;
+  logoImg.style.height = '52px';
+  logoImg.style.objectFit = 'contain';
+  logoImg.style.maxWidth = '420px';
+  logoWrap.appendChild(logoImg);
+  left.appendChild(logoWrap);
+
+  const title = document.createElement('h1');
+  title.textContent = (produto.nome || 'Produto').toUpperCase();
+  title.style.margin = '0';
+  title.style.fontSize = '36px';
+  title.style.fontWeight = '600';
+  title.style.color = IMAGE_EXPORT_ACCENT;
+  title.style.lineHeight = '1.2';
+  title.style.letterSpacing = '0.03em';
+  left.appendChild(title);
+
+  const especsContainer = document.createElement('div');
+  especsContainer.style.alignSelf = 'stretch';
+  especsContainer.style.width = '100%';
+  especsContainer.style.boxSizing = 'border-box';
+  especsContainer.style.border = `2px solid ${IMAGE_EXPORT_ACCENT}`;
+  especsContainer.style.borderRadius = '12px';
+  especsContainer.style.padding = '12px 18px 16px';
+  especsContainer.style.backgroundColor = 'rgba(12, 12, 18, 0.92)';
+  especsContainer.style.display = 'flex';
+  especsContainer.style.flexDirection = 'column';
+  especsContainer.style.flex = '1';
+  especsContainer.style.minHeight = '0';
+  especsContainer.style.gap = '12px';
+
+  const especsTitle = document.createElement('div');
+  especsTitle.textContent = 'Especificações';
+  especsTitle.style.fontSize = '22px';
+  especsTitle.style.fontWeight = 'bold';
+  especsTitle.style.color = '#ffffff';
+  especsTitle.style.textAlign = 'center';
+  especsTitle.style.margin = '0';
+  especsContainer.appendChild(especsTitle);
+
+  const especs = getProdutoEspecsItems(produto);
+  const especsGrid = document.createElement('div');
+  especsGrid.style.display = 'grid';
+  especsGrid.style.gridTemplateColumns = '1fr 1fr';
+  especsGrid.style.width = '100%';
+  especsGrid.style.gap = '14px 36px';
+  especsGrid.style.alignContent = 'start';
+
+  especs.forEach((spec) => {
+    const specItem = document.createElement('div');
+    specItem.style.display = 'flex';
+    specItem.style.flexDirection = 'column';
+    specItem.style.gap = '6px';
+
+    const specLabel = document.createElement('span');
+    specLabel.textContent = spec.label;
+    specLabel.style.color = '#b8b8c0';
+    specLabel.style.fontSize = '17px';
+    specLabel.style.fontWeight = 'normal';
+
+    const specValue = document.createElement('span');
+    specValue.textContent = spec.value;
+    specValue.style.color = '#ffffff';
+    specValue.style.fontSize = '20px';
+    specValue.style.fontWeight = 'bold';
+    specValue.style.lineHeight = '1.3';
+
+    specItem.appendChild(specLabel);
+    specItem.appendChild(specValue);
+    especsGrid.appendChild(specItem);
+  });
+
+  especsContainer.appendChild(especsGrid);
+  left.appendChild(especsContainer);
+
+  if (produto.preco != null) {
+    const precoDiv = document.createElement('div');
+    precoDiv.style.marginTop = '4px';
+    const precoLabel = document.createElement('div');
+    precoLabel.textContent = 'Valor à vista';
+    precoLabel.style.color = '#a0a0a8';
+    precoLabel.style.fontSize = '16px';
+    precoLabel.style.marginBottom = '8px';
+    precoDiv.appendChild(precoLabel);
+    const precoValor = document.createElement('div');
+    precoValor.textContent = `R$ ${formatPrice(produto.preco)}`;
+    precoValor.style.fontSize = '42px';
+    precoValor.style.fontWeight = 'bold';
+    precoValor.style.color = IMAGE_EXPORT_ACCENT;
+    precoDiv.appendChild(precoValor);
+    left.appendChild(precoDiv);
+  }
+
+  mainRow.appendChild(left);
+
+  const right = document.createElement('div');
+  right.style.width = '44%';
+  right.style.flexShrink = '0';
+  right.style.display = 'flex';
+  right.style.flexDirection = 'column';
+  right.style.alignItems = 'center';
+  right.style.justifyContent = 'flex-start';
+  right.style.minHeight = '0';
+
+  const imageWrap = document.createElement('div');
+  imageWrap.style.flex = '1';
+  imageWrap.style.display = 'flex';
+  imageWrap.style.alignItems = 'center';
+  imageWrap.style.justifyContent = 'center';
+  imageWrap.style.minHeight = '0';
+  imageWrap.style.width = '100%';
+
+  const marcaReservada = Boolean(produto.marca?.nome);
+  const fotoMaxH = IMAGE_EXPORT_HEIGHT - 72 - (marcaReservada ? 52 : 0);
+
+  if (produto.foto_url) {
+    const fotoImg = document.createElement('img');
+    fotoImg.src = produto.foto_url;
+    fotoImg.style.maxWidth = '100%';
+    fotoImg.style.maxHeight = `${fotoMaxH}px`;
+    fotoImg.style.objectFit = 'contain';
+    imageWrap.appendChild(fotoImg);
+  }
+
+  right.appendChild(imageWrap);
+
+  if (produto.marca?.nome) {
+    const marcaCaption = document.createElement('div');
+    marcaCaption.textContent = produto.marca.nome;
+    marcaCaption.style.flexShrink = '0';
+    marcaCaption.style.textAlign = 'center';
+    marcaCaption.style.width = '100%';
+    marcaCaption.style.marginTop = '8px';
+    marcaCaption.style.paddingLeft = '10px';
+    marcaCaption.style.paddingRight = '10px';
+    marcaCaption.style.boxSizing = 'border-box';
+    marcaCaption.style.fontSize = '20px';
+    marcaCaption.style.fontWeight = '600';
+    marcaCaption.style.color = '#e4e4ec';
+    marcaCaption.style.lineHeight = '1.3';
+    right.appendChild(marcaCaption);
+  }
+
+  mainRow.appendChild(right);
+  container.appendChild(mainRow);
+
+  return container;
+}
+
 // Função auxiliar para carregar imagem
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -222,163 +421,26 @@ export async function exportProductToImage(
   parcelas: Parcela[],
   logoUrl: string = '/logo.png'
 ) {
-  // Criar elemento HTML temporário
-  const container = document.createElement('div');
-  container.style.width = '1000px';
-  container.style.height = '1250px';
-  container.style.padding = '40px';
-  container.style.backgroundColor = '#030711';
-  container.style.color = '#ffffff';
-  container.style.fontFamily = 'Arial, sans-serif';
+  const container = buildProductImageExportDom(produto, logoUrl);
   container.style.position = 'absolute';
   container.style.left = '-9999px';
   container.style.top = '0';
-  container.style.boxSizing = 'border-box';
-  container.style.overflow = 'hidden';
-
-  // Logo
-  const logoDiv = document.createElement('div');
-  logoDiv.style.textAlign = 'right';
-  logoDiv.style.marginBottom = '30px';
-  const logoImg = document.createElement('img');
-  logoImg.src = logoUrl;
-  logoImg.style.height = '60px';
-  logoImg.style.objectFit = 'contain';
-  logoDiv.appendChild(logoImg);
-  container.appendChild(logoDiv);
-
-  // Título
-  const title = document.createElement('h1');
-  title.textContent = produto.nome || 'Produto';
-  title.style.fontSize = '40px';
-  title.style.fontWeight = 'bold';
-  title.style.color = '#E9B20E';
-  title.style.marginBottom = '15px';
-  container.appendChild(title);
-
-  // Marca
-  if (produto.marca?.nome) {
-    const marca = document.createElement('p');
-    marca.textContent = produto.marca.nome;
-    marca.style.color = '#999';
-    marca.style.marginBottom = '25px';
-    marca.style.fontSize = '18px';
-    container.appendChild(marca);
-  }
-
-  // Foto
-  if (produto.foto_url) {
-    const fotoDiv = document.createElement('div');
-    fotoDiv.style.textAlign = 'center';
-    fotoDiv.style.marginBottom = '20px';
-    const fotoImg = document.createElement('img');
-    fotoImg.src = produto.foto_url;
-    fotoImg.style.maxWidth = '500px';
-    fotoImg.style.maxHeight = '400px';
-    fotoImg.style.borderRadius = '8px';
-    fotoImg.style.objectFit = 'contain';
-    fotoDiv.appendChild(fotoImg);
-    container.appendChild(fotoDiv);
-  }
-
-  // Preço
-  if (produto.preco != null) {
-    const precoDiv = document.createElement('div');
-    precoDiv.style.marginBottom = '25px';
-    const precoLabel = document.createElement('p');
-    precoLabel.textContent = 'Valor à vista';
-    precoLabel.style.color = '#999';
-    precoLabel.style.fontSize = '16px';
-    precoLabel.style.marginBottom = '8px';
-    precoDiv.appendChild(precoLabel);
-    const precoValor = document.createElement('p');
-    precoValor.textContent = `R$ ${formatPrice(produto.preco)}`;
-    precoValor.style.fontSize = '44px';
-    precoValor.style.fontWeight = 'bold';
-    precoValor.style.color = '#E9B20E';
-    precoDiv.appendChild(precoValor);
-    container.appendChild(precoDiv);
-  }
-
-  // Especificações com borda dourada
-  const especsContainer = document.createElement('div');
-  especsContainer.style.marginBottom = '25px';
-  especsContainer.style.border = '2px solid #E9B20E';
-  especsContainer.style.borderRadius = '8px';
-  especsContainer.style.padding = '20px';
-  especsContainer.style.backgroundColor = 'rgba(20, 20, 20, 0.5)';
-
-  const especsTitle = document.createElement('h2');
-  especsTitle.textContent = 'Especificações';
-  especsTitle.style.fontSize = '24px';
-  especsTitle.style.fontWeight = 'bold';
-  especsTitle.style.marginBottom = '20px';
-  especsTitle.style.color = '#ffffff';
-  especsTitle.style.textAlign = 'center';
-  especsContainer.appendChild(especsTitle);
-
-  const especs = [
-    produto.marca && { label: 'Marca', value: produto.marca.nome },
-    produto.calibre && { label: 'Calibre', value: produto.calibre.nome },
-    produto.funcionamento && { label: 'Funcionamento', value: produto.funcionamento.nome },
-    produto.espec_capacidade_tiros && { label: 'Capacidade de Tiros', value: produto.espec_capacidade_tiros },
-    produto.espec_carregadores && { label: 'Carregadores', value: produto.espec_carregadores },
-    produto.espec_comprimento_cano && { label: 'Comprimento do Cano', value: produto.espec_comprimento_cano },
-    produto.caracteristica_acabamento && { label: 'Acabamento', value: produto.caracteristica_acabamento },
-    produto.categoria && { label: 'Categoria', value: produto.categoria.nome },
-  ].filter(Boolean) as Array<{ label: string; value: string }>;
-
-  // Criar grid de duas colunas
-  const especsGrid = document.createElement('div');
-  especsGrid.style.display = 'grid';
-  especsGrid.style.gridTemplateColumns = '1fr 1fr';
-  especsGrid.style.gap = '20px 40px';
-
-  especs.forEach((spec) => {
-    const specItem = document.createElement('div');
-    specItem.style.display = 'flex';
-    specItem.style.flexDirection = 'column';
-    specItem.style.gap = '4px';
-
-    const specLabel = document.createElement('span');
-    specLabel.textContent = spec.label;
-    specLabel.style.color = '#999';
-    specLabel.style.fontSize = '14px';
-    specLabel.style.fontWeight = 'normal';
-
-    const specValue = document.createElement('span');
-    specValue.textContent = spec.value;
-    specValue.style.color = '#ffffff';
-    specValue.style.fontSize = '16px';
-    specValue.style.fontWeight = 'bold';
-
-    specItem.appendChild(specLabel);
-    specItem.appendChild(specValue);
-    especsGrid.appendChild(specItem);
-  });
-
-  especsContainer.appendChild(especsGrid);
-  container.appendChild(especsContainer);
 
   document.body.appendChild(container);
 
-  // Aguardar carregamento das imagens
   await new Promise((resolve) => setTimeout(resolve, 1500));
 
-  // Converter para canvas com tamanho fixo de 1000x1500
   const canvas = await html2canvas(container, {
-    backgroundColor: '#030711',
-    width: 1000,
-    height: 1250,
+    backgroundColor: IMAGE_EXPORT_BG,
+    width: IMAGE_EXPORT_WIDTH,
+    height: IMAGE_EXPORT_HEIGHT,
     scale: 1,
     useCORS: true,
     logging: false,
   });
 
-  // Remover elemento temporário
   document.body.removeChild(container);
 
-  // Converter para JPEG com qualidade 0.85 (85%) para reduzir tamanho
   const imgData = canvas.toDataURL('image/jpeg', 0.85);
   const link = document.createElement('a');
   link.download = `${produto.nome?.replace(/[^a-z0-9]/gi, '_') || 'produto'}.jpg`;
@@ -393,160 +455,24 @@ export async function exportProductToImageAndShare(
   logoUrl: string = '/logo.png',
   phoneNumber?: string
 ) {
-  // Criar elemento HTML temporário
-  const container = document.createElement('div');
-  container.style.width = '1000px';
-  container.style.height = '1250px';
-  container.style.padding = '40px';
-  container.style.backgroundColor = '#030711';
-  container.style.color = '#ffffff';
-  container.style.fontFamily = 'Arial, sans-serif';
+  const container = buildProductImageExportDom(produto, logoUrl);
   container.style.position = 'absolute';
   container.style.left = '-9999px';
   container.style.top = '0';
-  container.style.boxSizing = 'border-box';
-  container.style.overflow = 'hidden';
-
-  // Logo
-  const logoDiv = document.createElement('div');
-  logoDiv.style.textAlign = 'right';
-  logoDiv.style.marginBottom = '30px';
-  const logoImg = document.createElement('img');
-  logoImg.src = logoUrl;
-  logoImg.style.height = '60px';
-  logoImg.style.objectFit = 'contain';
-  logoDiv.appendChild(logoImg);
-  container.appendChild(logoDiv);
-
-  // Título
-  const title = document.createElement('h1');
-  title.textContent = produto.nome || 'Produto';
-  title.style.fontSize = '40px';
-  title.style.fontWeight = 'bold';
-  title.style.color = '#E9B20E';
-  title.style.marginBottom = '15px';
-  container.appendChild(title);
-
-  // Marca
-  if (produto.marca?.nome) {
-    const marca = document.createElement('p');
-    marca.textContent = produto.marca.nome;
-    marca.style.color = '#999';
-    marca.style.marginBottom = '25px';
-    marca.style.fontSize = '18px';
-    container.appendChild(marca);
-  }
-
-  // Foto
-  if (produto.foto_url) {
-    const fotoDiv = document.createElement('div');
-    fotoDiv.style.textAlign = 'center';
-    fotoDiv.style.marginBottom = '20px';
-    const fotoImg = document.createElement('img');
-    fotoImg.src = produto.foto_url;
-    fotoImg.style.maxWidth = '500px';
-    fotoImg.style.maxHeight = '400px';
-    fotoImg.style.borderRadius = '8px';
-    fotoImg.style.objectFit = 'contain';
-    fotoDiv.appendChild(fotoImg);
-    container.appendChild(fotoDiv);
-  }
-
-  // Preço
-  if (produto.preco != null) {
-    const precoDiv = document.createElement('div');
-    precoDiv.style.marginBottom = '25px';
-    const precoLabel = document.createElement('p');
-    precoLabel.textContent = 'Valor à vista';
-    precoLabel.style.color = '#999';
-    precoLabel.style.fontSize = '16px';
-    precoLabel.style.marginBottom = '8px';
-    precoDiv.appendChild(precoLabel);
-    const precoValor = document.createElement('p');
-    precoValor.textContent = `R$ ${formatPrice(produto.preco)}`;
-    precoValor.style.fontSize = '44px';
-    precoValor.style.fontWeight = 'bold';
-    precoValor.style.color = '#E9B20E';
-    precoDiv.appendChild(precoValor);
-    container.appendChild(precoDiv);
-  }
-
-  // Especificações com borda dourada
-  const especsContainer = document.createElement('div');
-  especsContainer.style.marginBottom = '25px';
-  especsContainer.style.border = '2px solid #E9B20E';
-  especsContainer.style.borderRadius = '8px';
-  especsContainer.style.padding = '20px';
-  especsContainer.style.backgroundColor = 'rgba(20, 20, 20, 0.5)';
-
-  const especsTitle = document.createElement('h2');
-  especsTitle.textContent = 'Especificações';
-  especsTitle.style.fontSize = '24px';
-  especsTitle.style.fontWeight = 'bold';
-  especsTitle.style.marginBottom = '20px';
-  especsTitle.style.color = '#ffffff';
-  especsTitle.style.textAlign = 'center';
-  especsContainer.appendChild(especsTitle);
-
-  const especs = [
-    produto.marca && { label: 'Marca', value: produto.marca.nome },
-    produto.calibre && { label: 'Calibre', value: produto.calibre.nome },
-    produto.funcionamento && { label: 'Funcionamento', value: produto.funcionamento.nome },
-    produto.espec_capacidade_tiros && { label: 'Capacidade de Tiros', value: produto.espec_capacidade_tiros },
-    produto.espec_carregadores && { label: 'Carregadores', value: produto.espec_carregadores },
-    produto.espec_comprimento_cano && { label: 'Comprimento do Cano', value: produto.espec_comprimento_cano },
-    produto.caracteristica_acabamento && { label: 'Acabamento', value: produto.caracteristica_acabamento },
-    produto.categoria && { label: 'Categoria', value: produto.categoria.nome },
-  ].filter(Boolean) as Array<{ label: string; value: string }>;
-
-  // Criar grid de duas colunas
-  const especsGrid = document.createElement('div');
-  especsGrid.style.display = 'grid';
-  especsGrid.style.gridTemplateColumns = '1fr 1fr';
-  especsGrid.style.gap = '20px 40px';
-
-  especs.forEach((spec) => {
-    const specItem = document.createElement('div');
-    specItem.style.display = 'flex';
-    specItem.style.flexDirection = 'column';
-    specItem.style.gap = '4px';
-
-    const specLabel = document.createElement('span');
-    specLabel.textContent = spec.label;
-    specLabel.style.color = '#999';
-    specLabel.style.fontSize = '14px';
-    specLabel.style.fontWeight = 'normal';
-
-    const specValue = document.createElement('span');
-    specValue.textContent = spec.value;
-    specValue.style.color = '#ffffff';
-    specValue.style.fontSize = '16px';
-    specValue.style.fontWeight = 'bold';
-
-    specItem.appendChild(specLabel);
-    specItem.appendChild(specValue);
-    especsGrid.appendChild(specItem);
-  });
-
-  especsContainer.appendChild(especsGrid);
-  container.appendChild(especsContainer);
 
   document.body.appendChild(container);
 
-  // Aguardar carregamento das imagens
   await new Promise((resolve) => setTimeout(resolve, 1500));
 
-  // Converter para canvas
   const canvas = await html2canvas(container, {
-    backgroundColor: '#030711',
-    width: 1000,
-    height: 1250,
+    backgroundColor: IMAGE_EXPORT_BG,
+    width: IMAGE_EXPORT_WIDTH,
+    height: IMAGE_EXPORT_HEIGHT,
     scale: 1,
     useCORS: true,
     logging: false,
   });
 
-  // Remover elemento temporário
   document.body.removeChild(container);
 
   // Converter para JPEG

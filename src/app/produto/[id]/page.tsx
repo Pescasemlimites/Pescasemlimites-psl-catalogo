@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import Header from "../../../components/Header";
 import { supabase } from "../../../lib/supabaseClient";
 import { exportProductToPDF, exportProductToImage, exportProductToImageAndShare } from "../../../lib/exportProduct";
+import { emPromocaoValida, textoCondicaoPromocao } from "../../../lib/promoPreco";
+
+const CLIENTE_VITRINE_EMAIL = "cliente@gmail.com";
+const WHATSAPP_VENDAS_WA_ME = "5554996717871";
 
 type Arma = {
   id: string;
@@ -16,6 +20,11 @@ type Arma = {
   espec_carregadores: string | null;
   espec_comprimento_cano: string | null;
   caracteristica_acabamento: string | null;
+  em_destaque?: boolean | null;
+  em_promocao?: boolean | null;
+  preco_promocional?: number | null;
+  promocao_modo?: string | null;
+  promocao_parcelas_max?: number | null;
   marca: { nome: string } | null;
   calibre: { nome: string } | null;
   funcionamento: { nome: string } | null;
@@ -39,7 +48,6 @@ type Variacao = {
 };
 
 export default function ProdutoPage() {
-  const router = useRouter();
   const params = useParams();
   const produtoId = params.id as string;
 
@@ -51,6 +59,22 @@ export default function ProdutoPage() {
   const [fotoAtualIndex, setFotoAtualIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showParcelamento, setShowParcelamento] = useState(false);
+  const [isClienteVitrine, setIsClienteVitrine] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (cancelled) return;
+      const email = session?.user?.email?.trim().toLowerCase();
+      setIsClienteVitrine(email === CLIENTE_VITRINE_EMAIL);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!produtoId) {
@@ -58,6 +82,8 @@ export default function ProdutoPage() {
       setError("ID do produto inválido");
       return;
     }
+
+    let cancelled = false;
 
     const fetchProduto = async () => {
       try {
@@ -69,6 +95,8 @@ export default function ProdutoPage() {
           .select("*")
           .eq("id", produtoId)
           .single();
+
+        if (cancelled) return;
 
         if (produtoError || !produtoData) {
           setError("Produto não encontrado.");
@@ -89,7 +117,7 @@ export default function ProdutoPage() {
 
         // Se não houver fotos na tabela fotos_armas, usar foto_url como fallback
         const fotosFormatadas: FotoArma[] = fotosData && fotosData.length > 0
-          ? fotosData.map((foto: any) => ({
+          ? fotosData.map((foto: { id: string; foto_url: string; ordem: number; variacao_id?: string | null }) => ({
               id: foto.id,
               foto_url: foto.foto_url,
               ordem: foto.ordem,
@@ -104,6 +132,8 @@ export default function ProdutoPage() {
             }]
           : [];
 
+        if (cancelled) return;
+
         setFotos(fotosFormatadas);
 
         // Buscar variações do produto (calibre + cano + preço + acabamento)
@@ -117,20 +147,30 @@ export default function ProdutoPage() {
           console.warn("Erro ao buscar variações:", variacoesError);
         }
 
+        if (cancelled) return;
+
         const variacoesList: Variacao[] = [];
         if (variacoesData && variacoesData.length > 0) {
-          const calibreIds = [...new Set((variacoesData as any[]).map((v: any) => v.calibre_id).filter(Boolean))];
+          const rows = variacoesData as {
+            id: string;
+            calibre_id: string | null;
+            comprimento_cano: string;
+            preco: string | number;
+            caracteristica_acabamento?: string | null;
+          }[];
+          const calibreIds = [...new Set(rows.map((v) => v.calibre_id).filter(Boolean))] as string[];
           const calibresMap = new Map<string, string>();
           if (calibreIds.length > 0) {
             const { data: calibresData } = await supabase.from("calibres").select("id, nome").in("id", calibreIds);
-            (calibresData || []).forEach((c: any) => calibresMap.set(c.id, c.nome));
+            if (cancelled) return;
+            (calibresData || []).forEach((c: { id: string; nome: string }) => calibresMap.set(c.id, c.nome));
           }
-          variacoesData.forEach((v: any) => {
+          rows.forEach((v) => {
             variacoesList.push({
               id: v.id,
               calibre_id: v.calibre_id,
               comprimento_cano: v.comprimento_cano,
-              preco: parseFloat(v.preco),
+              preco: parseFloat(String(v.preco)),
               caracteristica_acabamento: v.caracteristica_acabamento ?? null,
               calibre: v.calibre_id && calibresMap.has(v.calibre_id) ? { nome: calibresMap.get(v.calibre_id)! } : null,
             });
@@ -170,6 +210,8 @@ export default function ProdutoPage() {
             : { data: null, error: null },
         ]);
 
+        if (cancelled) return;
+
         const produtoFormatado: Arma = {
           ...produtoData,
           marca: marcaResult.data ? { nome: marcaResult.data.nome } : null,
@@ -179,20 +221,30 @@ export default function ProdutoPage() {
         };
 
         setProduto(produtoFormatado);
-      } catch (err: any) {
-        console.error("Erro:", err);
-        setError(err?.message || "Erro ao carregar produto");
+      } catch (err: unknown) {
+        if (!cancelled) {
+          console.error("Erro:", err);
+          setError(err instanceof Error ? err.message : "Erro ao carregar produto");
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
-    fetchProduto();
+    void fetchProduto();
+
+    return () => {
+      cancelled = true;
+    };
   }, [produtoId]);
 
   // Valores atuais: produto com variação selecionada ou dados do produto
   const selectedVariacao = variacoes.find((v) => v.id === selectedVariacaoId) ?? null;
   const precoAtual = selectedVariacao != null ? selectedVariacao.preco : (produto?.preco ?? null);
+  const promocaoAtiva = produto != null && emPromocaoValida(produto);
+  const precoPromocional =
+    promocaoAtiva && produto?.preco_promocional != null ? Number(produto.preco_promocional) : null;
+  const precoVitrine = precoPromocional != null ? precoPromocional : precoAtual;
   const calibreAtual = selectedVariacao != null ? selectedVariacao.calibre : produto?.calibre ?? null;
   const comprimentoCanoAtual = selectedVariacao != null ? selectedVariacao.comprimento_cano : (produto?.espec_comprimento_cano ?? null);
   const acabamentoAtual = selectedVariacao?.caracteristica_acabamento ?? produto?.caracteristica_acabamento ?? null;
@@ -243,9 +295,9 @@ export default function ProdutoPage() {
   };
 
   const calcularParcelamento = () => {
-    if (precoAtual == null) return [];
+    if (precoVitrine == null) return [];
 
-    const preco = parseFloat(precoAtual.toString());
+    const preco = parseFloat(precoVitrine.toString());
     const parcelas = [];
 
     // 1x a 4x sem juros
@@ -291,7 +343,7 @@ export default function ProdutoPage() {
       const parcelas = calcularParcelamento();
       const produtoData = {
         nome: produto.nome,
-        preco: precoAtual,
+        preco: precoVitrine,
         marca: produto.marca,
         calibre: calibreAtual,
         funcionamento: produto.funcionamento,
@@ -314,7 +366,7 @@ export default function ProdutoPage() {
       const parcelas = calcularParcelamento();
       const produtoData = {
         nome: produto.nome,
-        preco: precoAtual,
+        preco: precoVitrine,
         marca: produto.marca,
         calibre: calibreAtual,
         funcionamento: produto.funcionamento,
@@ -333,11 +385,18 @@ export default function ProdutoPage() {
   };
 
   const handleShareWhatsApp = async () => {
+    if (isClienteVitrine) {
+      const nomeArma = produto.nome?.trim() || "este produto";
+      const texto = `Ola! Tenho interesse em comprar a *${nomeArma}*`;
+      const url = `https://wa.me/${WHATSAPP_VENDAS_WA_ME}?text=${encodeURIComponent(texto)}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
     try {
       const parcelas = calcularParcelamento();
       const produtoData = {
         nome: produto.nome,
-        preco: precoAtual,
+        preco: precoVitrine,
         marca: produto.marca,
         calibre: calibreAtual,
         funcionamento: produto.funcionamento,
@@ -348,8 +407,6 @@ export default function ProdutoPage() {
         caracteristica_acabamento: acabamentoAtual ?? produto.caracteristica_acabamento,
         foto_url: fotoAtual?.foto_url || produto.foto_url,
       };
-      // Você pode passar um número de telefone opcional aqui
-      // await exportProductToImageAndShare(produtoData, parcelas, '/logo.png', '5511999999999');
       await exportProductToImageAndShare(produtoData, parcelas);
     } catch (error) {
       console.error("Erro ao compartilhar no WhatsApp:", error);
@@ -370,7 +427,7 @@ export default function ProdutoPage() {
             {/* Imagem do Produto */}
             <div className="relative">
               {fotoAtual ? (
-                <div className="relative overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/40">
+                <div className="relative aspect-square w-full overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/40">
                   <img
                     src={fotoAtual.foto_url}
                     alt={produto.nome}
@@ -449,13 +506,22 @@ export default function ProdutoPage() {
                     </>
                   )}
                   
-                  {/* Badge Destaque (opcional) */}
-                  <div className="absolute left-4 top-4 rounded-full bg-[#E9B20E] px-3 py-1">
-                    <span className="text-xs font-bold text-zinc-900">Destaque</span>
+                  {/* Badges destaque / promoção */}
+                  <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2">
+                    {produto.em_destaque ? (
+                      <div className="rounded-full bg-[#E9B20E] px-3 py-1">
+                        <span className="text-xs font-bold text-zinc-900">Destaque</span>
+                      </div>
+                    ) : null}
+                    {promocaoAtiva ? (
+                      <div className="rounded bg-[#E9B20E] px-3 py-1 shadow-lg">
+                        <span className="text-xs font-black uppercase text-zinc-900">Promoção</span>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : (
-                <div className="flex h-96 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900/40">
+                <div className="flex aspect-square w-full items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900/40">
                   <p className="text-zinc-500">Sem imagem</p>
                 </div>
               )}
@@ -500,13 +566,32 @@ export default function ProdutoPage() {
 
               {/* Preço */}
               <div className="mb-6">
-                <p className="mb-1 text-sm text-zinc-400">Valor à vista</p>
-                <p className="text-5xl font-bold" style={{ color: "#E9B20E" }}>
-                  R$ {formatPrice(precoAtual)}
+                <p className="mb-1 text-sm text-zinc-400">
+                  {promocaoAtiva ? "Promoção" : "Valor à vista"}
                 </p>
-                <p className="mt-2 text-sm text-zinc-400">
-                  ou em até 4x sem juros ou até 10x com juros
-                </p>
+                {promocaoAtiva && precoAtual != null ? (
+                  <>
+                    <p className="text-lg text-zinc-500 line-through">R$ {formatPrice(precoAtual)}</p>
+                    <p className="text-5xl font-bold" style={{ color: "#E9B20E" }}>
+                      R$ {formatPrice(precoPromocional)}
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-zinc-300">
+                      {textoCondicaoPromocao(produto.promocao_modo, produto.promocao_parcelas_max)}
+                    </p>
+                    <p className="mt-1 text-sm text-zinc-500">
+                      Simulação de parcelamento com base no valor promocional.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-5xl font-bold" style={{ color: "#E9B20E" }}>
+                      R$ {formatPrice(precoAtual)}
+                    </p>
+                    <p className="mt-2 text-sm text-zinc-400">
+                      ou em até 4x sem juros ou até 10x com juros
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* Botões de Ação */}
@@ -541,7 +626,7 @@ export default function ProdutoPage() {
                   </span>
                 </button>
                 
-                {/* Botão de Exportar PDF */}
+                {!isClienteVitrine && (
                 <button
                   className="flex items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-sm font-bold transition-colors"
                   style={{ backgroundColor: "#E9B20E", color: "#030711" }}
@@ -568,6 +653,7 @@ export default function ProdutoPage() {
                   </svg>
                   Exportar PDF
                 </button>
+                )}
                 
                 {/* Botão de Exportar Imagem */}
                 <button
@@ -601,11 +687,13 @@ export default function ProdutoPage() {
                 </button>
               </div>
 
-              {/* Botão de Compartilhar no WhatsApp */}
               <div className="mb-6 flex justify-start">
                 <button
                   className="flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-bold transition-colors"
-                  style={{ backgroundColor: "#25D366", color: "#ffffff" }}
+                  style={{
+                    backgroundColor: "#25D366",
+                    color: isClienteVitrine ? "#000000" : "#ffffff",
+                  }}
                   onMouseEnter={(e) =>
                     (e.currentTarget.style.backgroundColor = "#20BA5A")
                   }
@@ -621,7 +709,9 @@ export default function ProdutoPage() {
                   >
                     <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
                   </svg>
-                  <span>Compartilhar no WhatsApp</span>
+                  <span>
+                    {isClienteVitrine ? "Chamar no WhatsApp" : "Compartilhar no WhatsApp"}
+                  </span>
                 </button>
               </div>
 
@@ -773,11 +863,14 @@ export default function ProdutoPage() {
             </div>
 
             {/* Valor Total */}
-            {precoAtual != null && (
+            {precoVitrine != null && (
               <div className="mb-6 rounded-lg border border-zinc-700 bg-zinc-800/50 p-4">
-                <p className="text-sm text-zinc-400">Valor total do produto</p>
+                <p className="text-sm text-zinc-400">Valor para parcelamento</p>
+                {promocaoAtiva && precoAtual != null ? (
+                  <p className="text-sm text-zinc-500 line-through">De R$ {formatPrice(precoAtual)}</p>
+                ) : null}
                 <p className="text-3xl font-bold" style={{ color: "#E9B20E" }}>
-                  R$ {formatPrice(precoAtual)}
+                  R$ {formatPrice(precoVitrine)}
                 </p>
               </div>
             )}

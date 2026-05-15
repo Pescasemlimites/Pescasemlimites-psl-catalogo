@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import Header from "../../../components/Header";
+import ProductListCard from "../../../components/ProductListCard";
 import { supabase } from "../../../lib/supabaseClient";
+import { useAuth } from "../../../contexts/AuthContext";
 
 type Arma = {
   id: string;
-  nome: string;
+  nome: string | null;
   preco: number | null;
   foto_url: string | null;
   categoria_id: number | null;
@@ -15,6 +17,11 @@ type Arma = {
   marca_id: string | null;
   calibre_id: string | null;
   calibres_id: string | null;
+  em_promocao?: boolean | null;
+  preco_promocional?: number | null;
+  promocao_modo?: string | null;
+  promocao_parcelas_max?: number | null;
+  em_destaque?: boolean | null;
   marca: { nome: string } | null;
   calibre: { nome: string } | null;
   primeiraFoto?: string | null; // Primeira foto da tabela fotos_armas
@@ -30,27 +37,46 @@ type Calibre = {
   nome: string;
 };
 
+/** Linha bruta de `armas` antes de enriquecer com marca/calibre/foto */
+type ArmaRowDb = {
+  id: string;
+  nome: string | null;
+  preco: number | null;
+  foto_url: string | null;
+  categoria_id: number | null;
+  espec_capacidade_tiros: string | null;
+  marca_id: string | null;
+  calibre_id: string | null;
+  calibres_id: string | null;
+  em_promocao?: boolean | null;
+  preco_promocional?: number | null;
+  promocao_modo?: string | null;
+  promocao_parcelas_max?: number | null;
+  em_destaque?: boolean | null;
+};
+
+type FotoRowDb = { arma_id: string; foto_url: string; ordem: number };
+type MarcaRowDb = { id: string; nome: string };
+type CalibreRowDb = { id: string; nome: string };
+
 export default function ProdutosPorCategoriaPage() {
-  const router = useRouter();
   const params = useParams();
   const categoria = params.categoria as string;
   const categoriaId = parseInt(categoria);
 
   const [loading, setLoading] = useState(true);
+  const { authLoading } = useAuth();
   const [armas, setArmas] = useState<Arma[]>([]);
   const [armasFiltradas, setArmasFiltradas] = useState<Arma[]>([]);
+  const [minPrecoPorArma, setMinPrecoPorArma] = useState<Map<string, number>>(new Map());
   const [nomeCategoria, setNomeCategoria] = useState<string>(`Categoria ${categoriaId}`);
   const [error, setError] = useState<string | null>(null);
-  const [minPrecoPorArma, setMinPrecoPorArma] = useState<Map<string, number>>(new Map()); 
-  const [calibresPorArma, setCalibresPorArma] = useState<Map<string, Set<string>>>(new Map()); // Mapa de arma_id -> Set de calibre_ids (das variações)
-
   
   // Estados para filtros
   const [marcas, setMarcas] = useState<Marca[]>([]);
   const [calibres, setCalibres] = useState<Calibre[]>([]);
   const [marcaSelecionada, setMarcaSelecionada] = useState<string | null>(null);
   const [calibreSelecionado, setCalibreSelecionado] = useState<string | null>(null);
-  const [filtroNome, setFiltroNome] = useState<string>("");
   const [dropdownMarcaAberto, setDropdownMarcaAberto] = useState(false);
   const [dropdownCalibreAberto, setDropdownCalibreAberto] = useState(false);
   
@@ -60,6 +86,8 @@ export default function ProdutosPorCategoriaPage() {
 
   // Buscar marcas e calibres disponíveis
   useEffect(() => {
+    if (authLoading) return;
+
     const fetchMarcas = async () => {
       const { data } = await supabase
         .from("marcas")
@@ -78,7 +106,7 @@ export default function ProdutosPorCategoriaPage() {
 
     fetchMarcas();
     fetchCalibres();
-  }, []);
+  }, [authLoading]);
 
   // Fechar dropdowns ao clicar fora
   useEffect(() => {
@@ -105,32 +133,17 @@ export default function ProdutosPorCategoriaPage() {
 
     if (calibreSelecionado) {
       filtradas = filtradas.filter((arma) => {
-        // Verificar calibre da arma principal
         const calibreId = arma.calibre_id || arma.calibres_id;
-        if (calibreId === calibreSelecionado) {
-          return true;
-        }
-        
-        // Verificar se alguma variação da arma tem o calibre selecionado
-        const calibresVariacoes = calibresPorArma.get(arma.id);
-        if (calibresVariacoes && calibresVariacoes.has(calibreSelecionado)) {
-          return true;
-        }
-        
-        return false;
+        return calibreId === calibreSelecionado;
       });
     }
 
-    if (filtroNome) {
-      filtradas = filtradas.filter((arma) => 
-        (arma.nome || "").toLowerCase().includes(filtroNome.toLowerCase())
-      );
-    }
-
     setArmasFiltradas(filtradas);
-  }, [armas, marcaSelecionada, calibreSelecionado, filtroNome, calibresPorArma]);
+  }, [armas, marcaSelecionada, calibreSelecionado]);
 
   useEffect(() => {
+    if (authLoading) return;
+
     // Validação: verificar se o ID é um número válido
     if (isNaN(categoriaId)) {
       setError("Categoria inválida.");
@@ -140,128 +153,111 @@ export default function ProdutosPorCategoriaPage() {
 
     const fetchData = async () => {
       try {
-        setLoading(true);
-        setError(null);
+        // Buscar o nome da categoria primeiro
+        const { data: categoriaData } = await supabase
+          .from("categorias")
+          .select("nome")
+          .eq("id", categoriaId)
+          .single();
 
-        // Buscar categoria e armas em paralelo
-        const [categoriaResult, armasResult] = await Promise.all([
-          supabase
-            .from("categorias")
-            .select("nome")
-            .eq("id", categoriaId)
-            .single(),
-          supabase
-            .from("armas")
-            .select("*")
-            .eq("categoria_id", categoriaId)
-            .order("nome")
-        ]);
-
-        if (categoriaResult.error || !categoriaResult.data) {
-          setError("Categoria não encontrada.");
-          setLoading(false);
-          return;
+        if (categoriaData) {
+          setNomeCategoria(categoriaData.nome);
         }
 
-        setNomeCategoria(categoriaResult.data.nome);
+        // Buscar produtos filtrados por categoria_id
+        const { data: armasData, error: armasError } = await supabase
+          .from("armas")
+          .select("*")
+          .eq("categoria_id", categoriaId);
 
-        if (armasResult.error) {
-          console.error("Erro ao buscar produtos:", armasResult.error);
-          setError(`Erro ao carregar produtos: ${armasResult.error.message}`);
-          setLoading(false);
-          return;
-        }
-
-        const armasData = armasResult.data || [];
-        const armaIds = armasData.map((a: any) => a.id);
-        
-        if (armaIds.length === 0) {
-          setArmas([]);
-          setArmasFiltradas([]);
-          setMinPrecoPorArma(new Map());
-          setCalibresPorArma(new Map());
-          setLoading(false);
-          return;
-        }
-
-        // Buscar variações, fotos, marcas e calibres em paralelo
-        const [variacoesResult, fotosResult] = await Promise.all([
-          supabase
-            .from("variacoes_armas")
-            .select("arma_id, preco, calibre_id")
-            .in("arma_id", armaIds),
-          supabase
-            .from("fotos_armas")
-            .select("arma_id, foto_url, ordem")
-            .in("arma_id", armaIds)
-            .order("arma_id, ordem", { ascending: true })
-        ]);
-
-        // Processar variações para preço mínimo e calibres por arma
-        const minMap = new Map<string, number>();
-        const calibresPorArmaMap = new Map<string, Set<string>>();
-        (variacoesResult.data || []).forEach((v: { arma_id: string; preco: number; calibre_id: string | null }) => {
-          const preco = parseFloat(String(v.preco));
-          const current = minMap.get(v.arma_id);
-          if (current == null || preco < current) minMap.set(v.arma_id, preco);
+        if (armasError) {
+          console.error("Erro ao buscar produtos:", armasError);
+          setError(`Erro ao carregar produtos: ${armasError.message}`);
+        } else {
+          // Buscar IDs das armas
+          const armaIds = (armasData || []).map((a: ArmaRowDb) => a.id);
           
-          // Adicionar calibre da variação ao mapa de calibres por arma
-          if (v.calibre_id) {
-            if (!calibresPorArmaMap.has(v.arma_id)) {
-              calibresPorArmaMap.set(v.arma_id, new Set());
+          // Buscar primeira foto de cada arma (ordem 0 ou menor ordem disponível)
+          const fotosMap = new Map<string, string>();
+          if (armaIds.length > 0) {
+            const { data: fotosData } = await supabase
+              .from("fotos_armas")
+              .select("arma_id, foto_url, ordem")
+              .in("arma_id", armaIds)
+              .order("ordem", { ascending: true });
+
+            if (fotosData) {
+              (fotosData as FotoRowDb[]).forEach((foto) => {
+                // Pegar apenas a primeira foto (menor ordem) de cada arma
+                if (!fotosMap.has(foto.arma_id)) {
+                  fotosMap.set(foto.arma_id, foto.foto_url);
+                }
+              });
             }
-            calibresPorArmaMap.get(v.arma_id)!.add(v.calibre_id);
           }
-        });
-        setMinPrecoPorArma(minMap);
-        setCalibresPorArma(calibresPorArmaMap);
-        
-        // Processar fotos - pegar apenas a primeira de cada arma
-        const fotosMap = new Map<string, string>();
-        (fotosResult.data || []).forEach((foto: any) => {
-          if (!fotosMap.has(foto.arma_id)) {
-            fotosMap.set(foto.arma_id, foto.foto_url);
+
+          // Buscar marcas e calibres em batch para melhor performance
+          const marcaIds = [...new Set((armasData || []).map((a: ArmaRowDb) => a.marca_id).filter(Boolean))] as string[];
+          const calibreIds = [
+            ...new Set(
+              (armasData || [])
+                .map((a: ArmaRowDb) => a.calibre_id || a.calibres_id)
+                .filter((id): id is string => Boolean(id))
+            ),
+          ];
+
+          const [marcasResult, calibresResult] = await Promise.all([
+            marcaIds.length > 0
+              ? supabase.from("marcas").select("id, nome").in("id", marcaIds)
+              : { data: [] as MarcaRowDb[], error: null },
+            calibreIds.length > 0
+              ? supabase.from("calibres").select("id, nome").in("id", calibreIds)
+              : { data: [] as CalibreRowDb[], error: null },
+          ]);
+
+          const marcasMap = new Map((marcasResult.data || []).map((m: MarcaRowDb) => [m.id, m.nome]));
+          const calibresMap = new Map((calibresResult.data || []).map((c: CalibreRowDb) => [c.id, c.nome]));
+
+          const armasFormatadas: Arma[] = (armasData || []).map((arma: ArmaRowDb) => {
+            const calibreId = arma.calibre_id || arma.calibres_id;
+            const marcaNome = arma.marca_id ? marcasMap.get(arma.marca_id) : undefined;
+            const calibreNome = calibreId ? calibresMap.get(calibreId) : undefined;
+            return {
+              ...arma,
+              marca: marcaNome != null ? { nome: marcaNome } : null,
+              calibre: calibreNome != null ? { nome: calibreNome } : null,
+              primeiraFoto: fotosMap.get(arma.id) || arma.foto_url || null, // Usar primeira foto da tabela fotos_armas, ou fallback para foto_url
+            };
+          });
+
+          const idsFmt = armasFormatadas.map((a) => a.id);
+          const minMap = new Map<string, number>();
+          if (idsFmt.length > 0) {
+            const { data: varsCat } = await supabase
+              .from("variacoes_armas")
+              .select("arma_id, preco")
+              .in("arma_id", idsFmt);
+            (varsCat || []).forEach((v: { arma_id: string; preco: number }) => {
+              const p = parseFloat(String(v.preco));
+              const cur = minMap.get(v.arma_id);
+              if (cur == null || p < cur) minMap.set(v.arma_id, p);
+            });
           }
-        });
+          setMinPrecoPorArma(minMap);
 
-        // Extrair IDs únicos para marcas e calibres
-        const marcaIds = [...new Set(armasData.map((a: any) => a.marca_id).filter(Boolean))];
-        const calibreIds = [...new Set(armasData.map((a: any) => a.calibre_id || a.calibres_id).filter(Boolean))];
-
-        // Buscar marcas e calibres em paralelo
-        const [marcasResult, calibresResult] = await Promise.all([
-          marcaIds.length > 0
-            ? supabase.from("marcas").select("id, nome").in("id", marcaIds)
-            : Promise.resolve({ data: [], error: null }),
-          calibreIds.length > 0
-            ? supabase.from("calibres").select("id, nome").in("id", calibreIds)
-            : Promise.resolve({ data: [], error: null }),
-        ]);
-
-        const marcasMap = new Map((marcasResult.data || []).map((m: any) => [m.id, m.nome]));
-        const calibresMap = new Map((calibresResult.data || []).map((c: any) => [c.id, c.nome]));
-
-        const armasFormatadas = armasData.map((arma: any) => {
-          const calibreId = arma.calibre_id || arma.calibres_id;
-          return {
-            ...arma,
-            marca: arma.marca_id && marcasMap.has(arma.marca_id) ? { nome: marcasMap.get(arma.marca_id) } : null,
-            calibre: calibreId && calibresMap.has(calibreId) ? { nome: calibresMap.get(calibreId) } : null,
-            primeiraFoto: fotosMap.get(arma.id) || arma.foto_url || null,
-          };
-        });
-        setArmas(armasFormatadas);
-        setArmasFiltradas(armasFormatadas);
-      } catch (err: any) {
+          setArmas(armasFormatadas);
+          setArmasFiltradas(armasFormatadas);
+        }
+      } catch (err: unknown) {
         console.error("Erro:", err);
-        setError(err?.message || "Erro ao carregar dados");
+        setError(err instanceof Error ? err.message : "Erro ao carregar dados");
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-  }, [categoriaId]);
+  }, [authLoading, categoriaId]);
 
   const handleMarcaSelecionada = (marcaId: string | null) => {
     setMarcaSelecionada(marcaId);
@@ -276,10 +272,9 @@ export default function ProdutosPorCategoriaPage() {
   const limparFiltros = () => {
     setMarcaSelecionada(null);
     setCalibreSelecionado(null);
-    setFiltroNome("");
   };
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div
         className="flex min-h-screen items-center justify-center"
@@ -320,42 +315,33 @@ export default function ProdutosPorCategoriaPage() {
       style={{ backgroundColor: "#030711" }}
     >
       <Header />
-      <main className="flex-1 px-4 py-8" style={{ backgroundColor: "#030711" }}>
+      <main className="flex-1 px-4 py-8 sm:px-6 lg:py-12" style={{ backgroundColor: "#030711" }}>
         <div className="mx-auto max-w-7xl">
-          <h1 className="mb-6 text-3xl font-bold text-white">
-            Produtos - {nomeCategoria}
-          </h1>
+          <header className="mb-8 border-b border-zinc-800/80 pb-8">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#E9B20E]/90">
+              Categoria
+            </p>
+            <h1 className="text-3xl font-bold tracking-tight text-white md:text-4xl">{nomeCategoria}</h1>
+            <p className="mt-3 max-w-2xl text-sm text-zinc-400">
+              Filtre por marca ou calibre para refinar a lista.
+            </p>
+          </header>
 
-          {/* Seção de Filtros */}
-          <div className="mb-6">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm text-white">Filtros</p>
-              {(marcaSelecionada || calibreSelecionado || filtroNome) && (
+          {/* Filtros */}
+          <div className="mb-10 rounded-2xl border border-zinc-700/60 bg-zinc-900/40 p-4 shadow-inner sm:p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm font-medium text-zinc-200">Filtros</p>
+              {(marcaSelecionada || calibreSelecionado) && (
                 <button
+                  type="button"
                   onClick={limparFiltros}
-                  className="text-sm text-zinc-400 hover:text-white transition-colors"
+                  className="text-sm font-medium text-[#E9B20E] underline-offset-2 hover:underline"
                 >
                   Limpar filtros
                 </button>
               )}
             </div>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              {/* Input Nome */}
-              <div>
-                <label htmlFor="filtro-nome" className="mb-1.5 block text-sm font-medium text-zinc-300">
-                  Nome
-                </label>
-                <input
-                  id="filtro-nome"
-                  type="text"
-                  value={filtroNome}
-                  onChange={(e) => setFiltroNome(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-600 bg-zinc-800/50 px-4 py-2.5 text-white placeholder-zinc-500 focus:border-[#E9B20E] focus:outline-none focus:ring-1 focus:ring-[#E9B20E]"
-                  placeholder="Buscar por nome..."
-                />
-              </div>
-            </div>
-            <div className="mt-4 flex gap-3">
+            <div className="flex flex-wrap gap-3">
               {/* Dropdown Marca */}
               <div className="relative" ref={marcaDropdownRef}>
                 <button
@@ -470,89 +456,40 @@ export default function ProdutosPorCategoriaPage() {
             </div>
           </div>
 
-          {(!armasFiltradas || armasFiltradas.length === 0) && (
-            <div className="rounded-lg border border-zinc-700/50 bg-zinc-900/30 p-8 text-center">
-              <p className="text-zinc-300 mb-2">
-                {marcaSelecionada || calibreSelecionado || filtroNome
-                  ? "Nenhum produto encontrado com os filtros aplicados."
-                  : "Nenhum produto encontrado para essa categoria."}
-              </p>
-              {(marcaSelecionada || calibreSelecionado || filtroNome) && (
-                <button
-                  onClick={limparFiltros}
-                  className="mt-4 text-[#E9B20E] hover:underline"
-                >
-                  Limpar filtros
-                </button>
-              )}
+          {!armasFiltradas || armasFiltradas.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/30 px-6 py-16 text-center">
+              <p className="text-zinc-400">Nenhum produto encontrado para essa categoria ou filtros.</p>
             </div>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {armasFiltradas?.map((arma) => (
-              <div
-                key={arma.id}
-                className="group cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900/40 p-4 text-white transition-all hover:border-zinc-600"
-                onClick={() => router.push(`/produto/${arma.id}`)}
-              >
-                {(arma.primeiraFoto || arma.foto_url) && (
-                  <div className="mb-3 h-48 w-full overflow-hidden rounded">
-                    <img
-                      src={arma.primeiraFoto || arma.foto_url || ""}
-                      alt={arma.nome}
-                      className="h-full w-full object-cover"
+          ) : (
+            <>
+              <p className="mb-4 text-sm text-zinc-500">
+                {armasFiltradas.length}{" "}
+                {armasFiltradas.length === 1 ? "produto listado" : "produtos listados"}
+              </p>
+              <div className="grid auto-rows-fr gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {armasFiltradas.map((arma) => {
+                  const metaParts = [
+                    arma.calibre?.nome,
+                    arma.espec_capacidade_tiros
+                      ? `${arma.espec_capacidade_tiros} tiros`
+                      : null,
+                  ].filter(Boolean) as string[];
+                  const metaLinha = metaParts.length > 0 ? metaParts.join(" · ") : null;
+                  return (
+                    <ProductListCard
+                      key={arma.id}
+                      product={arma}
+                      minVariacaoPreco={minPrecoPorArma.get(arma.id)}
+                      metaLinha={metaLinha}
+                      marcaNome={arma.marca?.nome ?? null}
+                      showMarcaAboveTitle
+                      showDestaqueBadge
                     />
-                  </div>
-                )}
-
-                {arma.marca && (
-                  <p className="mb-1 text-sm text-zinc-400">{arma.marca.nome}</p>
-                )}
-
-                <h2 className="mb-2 text-lg font-semibold text-white">{arma.nome}</h2>
-
-                {/* Especificações */}
-                <div className="mb-3 flex flex-wrap gap-1 text-sm text-zinc-400">
-                  {arma.calibre && <span>{arma.calibre.nome}</span>}
-                  {arma.calibre && arma.espec_capacidade_tiros && <span>•</span>}
-                  {arma.espec_capacidade_tiros && (
-                    <span>{arma.espec_capacidade_tiros} tiros</span>
-                  )}
-                </div>
-
-                {/* Preço com seta */}
-                <div className="flex items-center justify-between">
-                  {(() => {
-                    const minVariacao = minPrecoPorArma.get(arma.id);
-                    const precoExibir = minVariacao != null ? minVariacao : arma.preco;
-                    if (precoExibir == null) return null;
-                    const formatado = parseFloat(precoExibir.toString()).toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    });
-                    return (
-                      <p className="font-bold text-[#E9B20E]">
-                        {minVariacao != null ? "A partir de " : ""}R$ {formatado}
-                      </p>
-                    );
-                  })()}
-                  <svg
-                    className="h-5 w-5 text-zinc-400 transition-transform group-hover:translate-x-1"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M9 5l7 7-7 7"
-                    />
-                  </svg>
-                </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            </>
+          )}
         </div>
       </main>
     </div>

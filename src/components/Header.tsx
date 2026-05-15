@@ -9,7 +9,7 @@ import { supabase } from "../lib/supabaseClient";
 export default function Header() {
   const router = useRouter();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { isAdmin, authLoading } = useAuth();
+  const { isAdmin } = useAuth();
 
   const handleCategorias = () => {
     router.push("/categorias");
@@ -49,8 +49,28 @@ export default function Header() {
           />
         </div>
 
+        {/* Navegação principal (texto amarelo) */}
+        <nav className="hidden md:flex flex-1 items-center justify-center gap-8 px-4" aria-label="Principal">
+          <button
+            type="button"
+            onClick={() => router.push("/produtos")}
+            className="text-sm font-semibold tracking-wide transition-opacity hover:opacity-90"
+            style={{ color: "#E9B20E" }}
+          >
+            Produtos
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/promocoes")}
+            className="text-sm font-semibold tracking-wide transition-opacity hover:opacity-90"
+            style={{ color: "#E9B20E" }}
+          >
+            Promoções
+          </button>
+        </nav>
+
         {/* Desktop buttons - hidden on mobile */}
-        <div className="hidden md:flex items-center gap-3">
+        <div className="hidden md:flex shrink-0 items-center gap-3">
           {/* Categorias Button */}
           <button
             className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors"
@@ -72,7 +92,9 @@ export default function Header() {
                 d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
               />
             </svg>
-            <span className="text-sm font-bold text-zinc-900">Categorias</span>
+            <span className="text-sm font-light tracking-wide text-zinc-900">
+              Categorias
+            </span>
           </button>
 
           {/* Cadastros Button - apenas para admin */}
@@ -176,6 +198,30 @@ export default function Header() {
       {isMenuOpen && (
         <div className="md:hidden border-t border-zinc-800" style={{ backgroundColor: "#030711" }}>
           <div className="container mx-auto px-4 py-4 flex flex-col gap-3">
+            <div className="flex flex-col gap-2 border-b border-zinc-800 pb-3">
+              <button
+                type="button"
+                className="w-full py-2 text-left text-sm font-semibold"
+                style={{ color: "#E9B20E" }}
+                onClick={() => {
+                  router.push("/produtos");
+                  setIsMenuOpen(false);
+                }}
+              >
+                Produtos
+              </button>
+              <button
+                type="button"
+                className="w-full py-2 text-left text-sm font-semibold"
+                style={{ color: "#E9B20E" }}
+                onClick={() => {
+                  router.push("/promocoes");
+                  setIsMenuOpen(false);
+                }}
+              >
+                Promoções
+              </button>
+            </div>
             {/* Categorias Button */}
             <button
               className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors w-full"
@@ -195,7 +241,9 @@ export default function Header() {
                   d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
                 />
               </svg>
-              <span className="text-sm font-bold text-zinc-900">Categorias</span>
+              <span className="text-sm font-light tracking-wide text-zinc-900">
+                Categorias
+              </span>
             </button>
 
             {/* Cadastros Button - apenas para admin */}

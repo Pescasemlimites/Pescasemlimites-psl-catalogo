@@ -1,13 +1,17 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Header from "../../components/Header";
 import Footer from "../../components/Footer";
 import { supabase } from "../../../src/lib/supabaseClient";
 import { useAuth } from "../../contexts/AuthContext";
+import {
+  emPromocaoValida,
+  formatBRL,
+  precoOriginalLista,
+  textoCondicaoPromocao,
+} from "../../lib/promoPreco";
 
 type ArmaDestaque = {
   id: string;
@@ -21,19 +25,305 @@ type ArmaDestaque = {
   marca?: { nome: string } | null;
   calibre?: { nome: string } | null;
   primeiraFoto?: string | null;
+  em_promocao?: boolean | null;
+  preco_promocional?: number | null;
+  promocao_modo?: string | null;
+  promocao_parcelas_max?: number | null;
+  destaque_promocao?: boolean | null;
 };
+
+function PromoBannerBigCard({
+  arma,
+  minPrecoVariacao,
+  onCardClick,
+}: {
+  arma: ArmaDestaque;
+  minPrecoVariacao: number | undefined;
+  onCardClick: () => void;
+}) {
+  const orig = precoOriginalLista(minPrecoVariacao, arma.preco);
+  const cond = textoCondicaoPromocao(arma.promocao_modo, arma.promocao_parcelas_max);
+  return (
+    <button
+      type="button"
+      onClick={onCardClick}
+      className="group relative flex w-full flex-col overflow-hidden rounded-2xl border-2 border-[#E9B20E]/85 bg-zinc-900/90 text-left shadow-xl transition-all hover:border-[#f5d978] sm:flex-row"
+    >
+      <div className="pointer-events-none absolute right-0 top-0 z-10 origin-top-right translate-x-2 -translate-y-1 rotate-12 transform bg-[#E9B20E] px-10 py-1 text-xs font-black uppercase tracking-widest text-zinc-900 shadow-md sm:px-12">
+        Promoção
+      </div>
+      {(arma.primeiraFoto || arma.foto_url) && (
+        <div className="relative aspect-square w-full shrink-0 overflow-hidden sm:w-64 md:w-72">
+          <img
+            src={arma.primeiraFoto || arma.foto_url || ""}
+            alt={arma.nome}
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          />
+          <div className="absolute left-3 top-3 rounded bg-[#E9B20E] px-3 py-1 text-xs font-black uppercase text-zinc-900 shadow-lg">
+            PROMOÇÃO
+          </div>
+        </div>
+      )}
+      <div className="flex flex-1 flex-col justify-center gap-3 p-6 sm:py-8">
+        {arma.marca && <p className="text-sm text-zinc-400">{arma.marca.nome}</p>}
+        <h2 className="text-2xl font-bold text-white md:text-3xl">{arma.nome}</h2>
+        <div className="flex flex-wrap gap-1 text-sm text-zinc-400">
+          {arma.calibre && <span>{arma.calibre.nome}</span>}
+          {arma.calibre && arma.espec_capacidade_tiros && <span>•</span>}
+          {arma.espec_capacidade_tiros && <span>{arma.espec_capacidade_tiros} tiros</span>}
+        </div>
+        <div className="mt-2 space-y-1">
+          {orig != null && (
+            <p className="text-sm text-zinc-500 line-through">De R$ {formatBRL(orig)}</p>
+          )}
+          <p className="text-3xl font-bold text-[#E9B20E] md:text-4xl">
+            R$ {formatBRL(Number(arma.preco_promocional))}
+          </p>
+          {cond ? <p className="text-sm text-zinc-400">{cond}</p> : null}
+        </div>
+        <span className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-[#E9B20E]">
+          Ver produto
+          <svg className="h-4 w-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function PromoCarouselModal({
+  open,
+  onClose,
+  items,
+  minPrecoByArmaId,
+  onVerProduto,
+}: {
+  open: boolean;
+  onClose: () => void;
+  items: ArmaDestaque[];
+  minPrecoByArmaId: Map<string, number>;
+  onVerProduto: (id: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (open) setActive(0);
+  }, [open, items.length]);
+
+  const scrollByDir = (dir: -1 | 1) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth, behavior: "smooth" });
+  };
+
+  const onScrollSnap = () => {
+    const el = scrollRef.current;
+    if (!el || !items.length) return;
+    const w = el.clientWidth || 1;
+    const i = Math.round(el.scrollLeft / w);
+    setActive(Math.min(items.length - 1, Math.max(0, i)));
+  };
+
+  if (!open || items.length === 0) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3 sm:p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Promoções"
+      onClick={onClose}
+    >
+      <div className="relative w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute -top-10 right-0 z-20 rounded-full bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-zinc-700 sm:-top-2 sm:right-2"
+        >
+          Fechar
+        </button>
+        <p className="mb-3 text-center text-sm text-zinc-300">
+          Arraste para o lado <span className="text-zinc-500">(ou use as setas)</span> para ver cada arma
+        </p>
+
+        <div className="relative">
+          {items.length > 1 ? (
+            <>
+              <button
+                type="button"
+                aria-label="Promoção anterior"
+                onClick={() => scrollByDir(-1)}
+                className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:left-2 sm:p-2.5"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Próxima promoção"
+                onClick={() => scrollByDir(1)}
+                className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:right-2 sm:p-2.5"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </>
+          ) : null}
+
+          <div
+            ref={scrollRef}
+            onScroll={onScrollSnap}
+            className="flex max-h-[min(85vh,880px)] snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-2xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            {items.map((arma) => (
+              <div key={arma.id} className="w-full min-w-full shrink-0 snap-center px-0.5 sm:px-2">
+                <PromoBannerBigCard
+                  arma={arma}
+                  minPrecoVariacao={minPrecoByArmaId.get(arma.id)}
+                  onCardClick={() => onVerProduto(arma.id)}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {items.length > 1 ? (
+          <div className="mt-4 flex justify-center gap-2">
+            {items.map((arma, i) => (
+              <button
+                key={arma.id}
+                type="button"
+                aria-label={`Ir para promoção ${i + 1}`}
+                onClick={() => {
+                  const el = scrollRef.current;
+                  if (!el) return;
+                  el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+                }}
+                className={`h-2 rounded-full transition-all ${i === active ? "w-8 bg-[#E9B20E]" : "w-2 bg-white/40 hover:bg-white/60"}`}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const router = useRouter();
   const { authLoading } = useAuth();
   const [armasDestaque, setArmasDestaque] = useState<ArmaDestaque[]>([]);
   const [minPrecoPorArma, setMinPrecoPorArma] = useState<Map<string, number>>(new Map());
+  const [armasBannerPromo, setArmasBannerPromo] = useState<ArmaDestaque[]>([]);
+  const [minPrecoBannerPromoByArmaId, setMinPrecoBannerPromoByArmaId] = useState<Map<string, number>>(
+    new Map()
+  );
+  const [promoModalOpen, setPromoModalOpen] = useState(false);
   const [loadingDestaques, setLoadingDestaques] = useState(true);
 
   useEffect(() => {
     if (authLoading) return;
 
     const fetchDestaques = async () => {
+      const loadPromoBanner = async () => {
+        const { data: promoRows } = await supabase
+          .from("armas")
+          .select("*")
+          .eq("em_promocao", true)
+          .not("preco_promocional", "is", null)
+          .order("nome", { ascending: true })
+          .limit(40);
+
+        let rows = (promoRows || []).filter((r: ArmaDestaque) => emPromocaoValida(r));
+        rows.sort((a: any, b: any) => {
+          const d = Number(Boolean(b.destaque_promocao)) - Number(Boolean(a.destaque_promocao));
+          if (d !== 0) return d;
+          return String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR");
+        });
+
+        if (rows.length === 0) {
+          setArmasBannerPromo([]);
+          setMinPrecoBannerPromoByArmaId(new Map());
+          return;
+        }
+
+        const ids = rows.map((r: any) => r.id as string);
+
+        const { data: fotosData } = await supabase
+          .from("fotos_armas")
+          .select("arma_id, foto_url, ordem")
+          .in("arma_id", ids)
+          .order("ordem", { ascending: true });
+        const fotosMap = new Map<string, string>();
+        (fotosData || []).forEach((f: { arma_id: string; foto_url: string }) => {
+          if (!fotosMap.has(f.arma_id)) fotosMap.set(f.arma_id, f.foto_url);
+        });
+
+        const { data: varsB } = await supabase
+          .from("variacoes_armas")
+          .select("arma_id, preco")
+          .in("arma_id", ids);
+        const minVarMap = new Map<string, number>();
+        (varsB || []).forEach((row: { arma_id: string; preco: number }) => {
+          const p = parseFloat(String(row.preco));
+          const cur = minVarMap.get(row.arma_id);
+          if (cur == null || p < cur) minVarMap.set(row.arma_id, p);
+        });
+
+        const marcaIds = [...new Set(rows.map((r: any) => r.marca_id).filter(Boolean))];
+        const calibreIds = [...new Set(rows.map((r: any) => r.calibre_id || r.calibres_id).filter(Boolean))];
+
+        const [marcasResult, calibresResult] = await Promise.all([
+          marcaIds.length > 0
+            ? supabase.from("marcas").select("id, nome").in("id", marcaIds as string[])
+            : { data: [] as { id: string; nome: string }[] },
+          calibreIds.length > 0
+            ? supabase.from("calibres").select("id, nome").in("id", calibreIds as string[])
+            : { data: [] as { id: string; nome: string }[] },
+        ]);
+
+        const marcasMap = new Map((marcasResult.data || []).map((m: { id: string; nome: string }) => [m.id, m.nome]));
+        const calibresMap = new Map(
+          (calibresResult.data || []).map((c: { id: string; nome: string }) => [c.id, c.nome])
+        );
+
+        const formatted: ArmaDestaque[] = rows.map((rawB: any) => {
+          const calibreIdB = rawB.calibre_id || rawB.calibres_id;
+          return {
+            ...rawB,
+            marca: rawB.marca_id && marcasMap.has(rawB.marca_id) ? { nome: marcasMap.get(rawB.marca_id)! } : null,
+            calibre:
+              calibreIdB && calibresMap.has(calibreIdB) ? { nome: calibresMap.get(calibreIdB)! } : null,
+            primeiraFoto: fotosMap.get(rawB.id) || rawB.foto_url || null,
+          };
+        });
+
+        setArmasBannerPromo(formatted);
+        setMinPrecoBannerPromoByArmaId(minVarMap);
+      };
+
       try {
         setLoadingDestaques(true);
         // Buscar armas em destaque
@@ -51,7 +341,6 @@ export default function Dashboard() {
         if (!armasData || armasData.length === 0) {
           setArmasDestaque([]);
           setMinPrecoPorArma(new Map());
-          setLoadingDestaques(false);
           return;
         }
 
@@ -119,6 +408,11 @@ export default function Dashboard() {
       } catch (err: any) {
         console.error("Erro ao buscar destaques:", err);
       } finally {
+        try {
+          await loadPromoBanner();
+        } catch (e) {
+          console.error("Erro ao carregar banner de promoção:", e);
+        }
         setLoadingDestaques(false);
       }
     };
@@ -161,7 +455,7 @@ export default function Dashboard() {
       {/* Content */}
       <div className="relative z-10 flex min-h-screen flex-col">
         <Header />
-        <div className="flex flex-1 items-center justify-center px-4 py-16">
+        <div className="flex flex-1 flex-col items-center px-4 py-12 md:py-16">
       <div className="flex w-full max-w-4xl flex-col items-center justify-center gap-8 text-center">
         {/* Premium Badge */}
         <div
@@ -199,7 +493,7 @@ export default function Dashboard() {
 
         {/* Descriptive Paragraph */}
         <p className="max-w-2xl text-lg leading-relaxed text-zinc-300 md:text-xl">
-          Descubra nossa coleção exclusiva de armas de fogo com a mais alta
+          Descubra nossa coleção de armas de fogo com a mais alta
           qualidade, precisão incomparável e design sofisticado.
         </p>
 
@@ -233,6 +527,60 @@ export default function Dashboard() {
           </button>
         </div>
         </div>
+
+        {armasBannerPromo.length > 0 && emPromocaoValida(armasBannerPromo[0]) && (
+          <section className="mt-10 w-full max-w-4xl px-1">
+            {armasBannerPromo.length === 1 ? (
+              <PromoBannerBigCard
+                arma={armasBannerPromo[0]}
+                minPrecoVariacao={minPrecoBannerPromoByArmaId.get(armasBannerPromo[0].id)}
+                onCardClick={() => router.push(`/produto/${armasBannerPromo[0].id}`)}
+              />
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setPromoModalOpen(true)}
+                  className="group flex w-full items-center gap-4 overflow-hidden rounded-2xl border-2 border-[#E9B20E]/85 bg-zinc-900/90 p-4 text-left shadow-xl transition-all hover:border-[#f5d978] sm:gap-5 sm:p-5"
+                >
+                  {(armasBannerPromo[0].primeiraFoto || armasBannerPromo[0].foto_url) && (
+                    <div className="relative size-20 shrink-0 overflow-hidden rounded-lg sm:size-24">
+                      <img
+                        src={armasBannerPromo[0].primeiraFoto || armasBannerPromo[0].foto_url || ""}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                      <div className="absolute left-1 top-1 rounded bg-[#E9B20E] px-1.5 py-0.5 text-[9px] font-black uppercase text-zinc-900">
+                        Promo
+                      </div>
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-lg font-bold text-white sm:text-xl">
+                      {armasBannerPromo.length} armas em promoção
+                    </p>
+                    <p className="mt-1 text-sm text-zinc-400">
+                      Toque para abrir. No painel, arraste para o lado para ver cada arma.
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-sm font-semibold text-[#E9B20E] group-hover:underline">
+                    Abrir
+                  </span>
+                </button>
+                <PromoCarouselModal
+                  open={promoModalOpen}
+                  onClose={() => setPromoModalOpen(false)}
+                  items={armasBannerPromo}
+                  minPrecoByArmaId={minPrecoBannerPromoByArmaId}
+                  onVerProduto={(id) => {
+                    setPromoModalOpen(false);
+                    router.push(`/produto/${id}`);
+                  }}
+                />
+              </>
+            )}
+          </section>
+        )}
         </div>
 
         {/* Modelos em Destaque Section */}
@@ -274,12 +622,17 @@ export default function Dashboard() {
                     onClick={() => router.push(`/produto/${arma.id}`)}
                   >
                     {(arma.primeiraFoto || arma.foto_url) && (
-                      <div className="mb-3 h-48 w-full overflow-hidden rounded">
+                      <div className="relative mb-3 aspect-square w-full overflow-hidden rounded">
                         <img
                           src={arma.primeiraFoto || arma.foto_url || ""}
                           alt={arma.nome}
                           className="h-full w-full object-cover transition-transform group-hover:scale-105"
                         />
+                        {emPromocaoValida(arma) ? (
+                          <div className="absolute left-2 top-2 rounded bg-[#E9B20E] px-2 py-0.5 text-[10px] font-black uppercase text-zinc-900 shadow">
+                            Promoção
+                          </div>
+                        ) : null}
                       </div>
                     )}
 
@@ -302,12 +655,37 @@ export default function Dashboard() {
                     <div className="flex items-center justify-between">
                       {(() => {
                         const minVariacao = minPrecoPorArma.get(arma.id);
-                        const precoExibir = minVariacao != null ? minVariacao : arma.preco;
-                        if (precoExibir == null) return null;
-                        const formatado = parseFloat(precoExibir.toString()).toLocaleString("pt-BR", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        });
+                        const original = precoOriginalLista(minVariacao, arma.preco);
+                        const promoOk = emPromocaoValida(arma);
+                        if (!promoOk && original == null) return null;
+                        if (promoOk && original != null) {
+                          return (
+                            <div className="text-left">
+                              <p className="text-xs text-zinc-500 line-through">
+                                {minVariacao != null ? "A partir de " : ""}R$ {formatBRL(original)}
+                              </p>
+                              <p className="font-bold text-[#E9B20E]">
+                                R$ {formatBRL(Number(arma.preco_promocional))}
+                              </p>
+                              <p className="text-[11px] text-zinc-500">
+                                {textoCondicaoPromocao(arma.promocao_modo, arma.promocao_parcelas_max)}
+                              </p>
+                            </div>
+                          );
+                        }
+                        if (promoOk) {
+                          return (
+                            <div>
+                              <p className="font-bold text-[#E9B20E]">
+                                R$ {formatBRL(Number(arma.preco_promocional))}
+                              </p>
+                              <p className="text-[11px] text-zinc-500">
+                                {textoCondicaoPromocao(arma.promocao_modo, arma.promocao_parcelas_max)}
+                              </p>
+                            </div>
+                          );
+                        }
+                        const formatado = formatBRL(original!);
                         return (
                           <p className="font-bold text-[#E9B20E]">
                             {minVariacao != null ? "A partir de " : ""}R$ {formatado}

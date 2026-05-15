@@ -1,7 +1,15 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useRef } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useRef,
+} from "react";
 import { useRouter, usePathname } from "next/navigation";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
 
 type AuthContextType = {
@@ -18,101 +26,100 @@ const AuthContext = createContext<AuthContextType>({
   userId: null,
 });
 
+async function loadProfileIntoState(session: Session): Promise<{
+  role: string | null;
+  userId: string;
+}> {
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", session.user.id)
+    .single();
+
+  if (!profileError && profile) {
+    return { role: profile.role, userId: session.user.id };
+  }
+  return { role: null, userId: session.user.id };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const pathnameRef = useRef(pathname);
+  const routerRef = useRef(router);
+
+  useLayoutEffect(() => {
+    pathnameRef.current = pathname;
+    routerRef.current = router;
+  }, [pathname, router]);
+
   const [authLoading, setAuthLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-  const hasCheckedRef = useRef(false);
 
   useEffect(() => {
-    if (hasCheckedRef.current) return;
+    let cancelled = false;
 
-    const checkAuth = async () => {
-      try {
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession();
-
-        if (error || !session) {
-          if (error) {
-            console.error("Erro na sessão:", error.message);
-            await supabase.auth.signOut();
-          }
-          // Só redireciona se não estiver já em /login
-          if (pathname !== "/login") {
-            router.push("/login");
-          }
-          setAuthLoading(false);
-          return;
-        }
-
-        // Buscar role do usuário
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", session.user.id)
-          .single();
-
-        if (!profileError && profile) {
-          setUserRole(profile.role);
-          setUserId(session.user.id);
-        } else {
-          // Se não tem perfil, não é admin
-          setUserRole(null);
-          setUserId(session.user.id);
-        }
-        setAuthLoading(false);
-        hasCheckedRef.current = true;
-      } catch (err) {
-        console.error("Erro inesperado:", err);
-        await supabase.auth.signOut();
-        // Só redireciona se não estiver já em /login
-        if (pathname !== "/login") {
-          router.push("/login");
-        }
-        setAuthLoading(false);
+    const redirectLoginIfNeeded = () => {
+      if (pathnameRef.current !== "/login") {
+        routerRef.current.push("/login");
       }
     };
 
-    checkAuth();
+    const applyNoSession = () => {
+      if (cancelled) return;
+      setUserRole(null);
+      setUserId(null);
+      setAuthLoading(false);
+      redirectLoginIfNeeded();
+    };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (!session && event === "SIGNED_OUT") {
-          // Só redireciona se não estiver já em /login
-          if (pathname !== "/login") {
-            router.push("/login");
-          }
+    const applySession = async (session: Session) => {
+      const { role, userId: uid } = await loadProfileIntoState(session);
+      if (cancelled) return;
+      setUserRole(role);
+      setUserId(uid);
+      setAuthLoading(false);
+    };
+
+    const handleAuthEvent = async (event: AuthChangeEvent, session: Session | null) => {
+      if (cancelled) return;
+
+      try {
+        if (!session) {
+          applyNoSession();
+          return;
+        }
+
+        if (event === "TOKEN_REFRESHED") {
+          if (!cancelled) setAuthLoading(false);
+          return;
+        }
+
+        await applySession(session);
+      } catch (err) {
+        console.error("Erro inesperado na auth:", err);
+        await supabase.auth.signOut();
+        if (!cancelled) {
           setUserRole(null);
           setUserId(null);
-          hasCheckedRef.current = false;
           setAuthLoading(false);
-        } else if (session && event === "SIGNED_IN") {
-          // Buscar role quando realmente fizer login
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("role")
-            .eq("id", session.user.id)
-            .single();
-
-          if (profile) {
-            setUserRole(profile.role);
-            setUserId(session.user.id);
-          } else {
-            setUserRole(null);
-            setUserId(session.user.id);
-          }
-          setAuthLoading(false);
-          hasCheckedRef.current = true;
+          redirectLoginIfNeeded();
         }
       }
-    );
+    };
 
-    return () => subscription.unsubscribe();
-  }, [router, pathname]); // Incluir router e pathname para evitar stale closure
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      void handleAuthEvent(event, session);
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   return (
     <AuthContext.Provider
@@ -131,4 +138,3 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth() {
   return useContext(AuthContext);
 }
-

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Header from "../../components/Header";
 import { supabase } from "../../lib/supabaseClient";
+import { useAuth } from "../../contexts/AuthContext";
 
 type Categoria = {
   id: number;
@@ -13,76 +14,80 @@ type Categoria = {
 
 // Mapeamento de nomes de categorias para ícones
 const ICON_MAP: Record<string, string> = {
-  "Pistolas": "/icons/pistola.png",
+  Pistolas: "/icons/pistola.png",
   "Revólveres": "/icons/revolver.png",
-  "Espingarda_Semi": "/icons/espingardaSemi.png",
-  "Espingarda_Rep": "/icons/espingardaRep.png",
-  "Carabinas": "/icons/carabina.png",
-  "Fuzil": "/icons/fuzil.png",
+  Espingarda_Semi: "/icons/espingardaSemi.png",
+  Espingarda_Rep: "/icons/espingardaRep.png",
+  Carabinas: "/icons/carabina.png",
+  Fuzil: "/icons/fuzil.png",
 };
 
-// Mapeamento de nomes para textos personalizados dos botões
-const TEXT_MAP: Record<string, string> = {
-  "Pistolas": "Pistola",
-  "Revólveres": "Revolver",
-  "Espingarda_Semi": "Espingarda SemiAuto",
-  "Espingarda_Rep": "Espingarda de Repetição",
-  "Carabinas": "Carabina",
-  "Fuzil": "Fuzil",
-};
+/** Troca hífens e underscores por espaços e capitaliza o início de cada palavra (pt-BR). */
+function formatCategoriaLabel(nome: string): string {
+  const spaced = nome
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!spaced) return nome;
+  return spaced
+    .split(" ")
+    .map((word) => {
+      if (!word) return word;
+      const lower = word.toLocaleLowerCase("pt-BR");
+      return lower.charAt(0).toLocaleUpperCase("pt-BR") + lower.slice(1);
+    })
+    .join(" ");
+}
 
 export default function CategoriasPage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
+  const { authLoading, userId } = useAuth();
+  const [listLoading, setListLoading] = useState(true);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+    if (authLoading || !userId) return;
 
-      if (!session) {
-        router.push("/login");
-        return;
+    let cancelled = false;
+
+    void (async () => {
+      setListLoading(true);
+      const { data, error } = await supabase
+        .from("categorias")
+        .select("id, nome")
+        .order("nome");
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Erro ao buscar categorias:", error);
+      } else if (data) {
+        setCategorias(data);
       }
+      setListLoading(false);
+    })();
 
-      // Buscar categorias do banco
-      const fetchCategorias = async () => {
-        const { data, error } = await supabase
-          .from("categorias")
-          .select("id, nome")
-          .order("nome");
-
-        if (error) {
-          console.error("Erro ao buscar categorias:", error);
-        } else if (data) {
-          setCategorias(data);
-        }
-        setLoading(false);
-      };
-
-      fetchCategorias();
+    return () => {
+      cancelled = true;
     };
-
-    checkAuth();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        router.push("/login");
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [router]);
+  }, [authLoading, userId]);
 
   const handleCategoriaClick = (categoriaId: number) => {
-    router.push(`/produtos/${categoriaId}`);
+    router.push(`/produtos?categoria=${categoriaId}`);
   };
 
-  if (loading) {
+  if (authLoading || !userId) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center"
+        style={{ backgroundColor: "#030711" }}
+      >
+        <div className="text-white">Carregando...</div>
+      </div>
+    );
+  }
+
+  if (listLoading) {
     return (
       <div
         className="flex min-h-screen items-center justify-center"
@@ -117,7 +122,7 @@ export default function CategoriasPage() {
                 d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
               />
             </svg>
-            <h1 className="text-3xl font-bold text-white md:text-4xl">
+            <h1 className="text-3xl font-light tracking-wide text-white md:text-4xl">
               Categorias
             </h1>
           </div>
@@ -140,14 +145,14 @@ export default function CategoriasPage() {
                   {ICON_MAP[categoria.nome] && (
                     <Image
                       src={ICON_MAP[categoria.nome]}
-                      alt={categoria.nome}
+                      alt={formatCategoriaLabel(categoria.nome)}
                       width={40}
                       height={40}
                       className="h-10 w-10 shrink-0 object-contain"
                     />
                   )}
-                  <span className="text-base font-medium text-zinc-900">
-                    {TEXT_MAP[categoria.nome] || categoria.nome}
+                  <span className="text-base font-medium tracking-normal text-zinc-900">
+                    {formatCategoriaLabel(categoria.nome)}
                   </span>
                 </button>
               ))}

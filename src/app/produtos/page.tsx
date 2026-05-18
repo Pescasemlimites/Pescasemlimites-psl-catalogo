@@ -5,7 +5,11 @@ import { useSearchParams } from "next/navigation";
 import Header from "../../components/Header";
 import ProductListCard from "../../components/ProductListCard";
 import { supabase } from "../../lib/supabaseClient";
-import { fetchMinPrecoPorArmaIds } from "../../lib/fetchVariacoesMinPreco";
+import {
+  armaPassaFiltroCalibre,
+  calibreExibicaoLista,
+  fetchVariacoesMetaPorArmaIds,
+} from "../../lib/fetchVariacoesMinPreco";
 import { emPromocaoValida, formatBRL, precoOriginalLista } from "../../lib/promoPreco";
 
 type Arma = {
@@ -178,11 +182,15 @@ function ProdutosPageContent() {
   const [marcas, setMarcas] = useState<Marca[]>([]);
   const [calibres, setCalibres] = useState<Calibre[]>([]);
   const [minPrecoPorArma, setMinPrecoPorArma] = useState<Map<string, number>>(new Map());
+  const [calibresPorVariacao, setCalibresPorVariacao] = useState<Map<string, Set<string>>>(
+    new Map()
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [categoriaFiltro, setCategoriaFiltro] = useState<number | null>(null);
   const [marcaFiltro, setMarcaFiltro] = useState<string | null>(null);
   const [calibreFiltro, setCalibreFiltro] = useState<string | null>(null);
+  const [nomeFiltro, setNomeFiltro] = useState("");
   const [precoFiltroMin, setPrecoFiltroMin] = useState(0);
   const [precoFiltroMax, setPrecoFiltroMax] = useState(0);
   const [precoSliderReady, setPrecoSliderReady] = useState(false);
@@ -226,6 +234,9 @@ function ProdutosPageContent() {
       } else if (typeof o.calibreFiltro === "string") {
         setCalibreFiltro(o.calibreFiltro);
       }
+      if (typeof o.nomeFiltro === "string") {
+        setNomeFiltro(o.nomeFiltro);
+      }
     } catch {
       /* JSON inválido ou storage indisponível */
     } finally {
@@ -250,6 +261,7 @@ function ProdutosPageContent() {
           categoriaFiltro,
           marcaFiltro,
           calibreFiltro,
+          nomeFiltro,
           precoFiltroMin,
           precoFiltroMax,
         })
@@ -257,7 +269,7 @@ function ProdutosPageContent() {
     } catch {
       /* quota, modo privado */
     }
-  }, [categoriaFiltro, marcaFiltro, calibreFiltro, precoFiltroMin, precoFiltroMax, filtrosRestaurados, precoSliderReady]);
+  }, [categoriaFiltro, marcaFiltro, calibreFiltro, nomeFiltro, precoFiltroMin, precoFiltroMax, filtrosRestaurados, precoSliderReady]);
 
   useEffect(() => {
     const fetchArmas = async () => {
@@ -297,10 +309,14 @@ function ProdutosPageContent() {
           setError(`Erro ao carregar produtos: ${armasResult.error.message}`);
           setArmas([]);
           setMinPrecoPorArma(new Map());
+          setCalibresPorVariacao(new Map());
         } else {
           const armasList = (armasResult.data || []) as Arma[];
-          const minMap = await fetchMinPrecoPorArmaIds(armasList.map((a) => a.id));
-          setMinPrecoPorArma(minMap);
+          const { minPreco, calibresPorArma } = await fetchVariacoesMetaPorArmaIds(
+            armasList.map((a) => a.id)
+          );
+          setMinPrecoPorArma(minPreco);
+          setCalibresPorVariacao(calibresPorArma);
 
           const ids = armasList.map((a) => a.id);
           const fotosMap = new Map<string, string>();
@@ -382,7 +398,13 @@ function ProdutosPageContent() {
       list = list.filter((a) => a.marca_id === marcaFiltro);
     }
     if (calibreFiltro) {
-      list = list.filter((a) => a.calibres_id === calibreFiltro);
+      list = list.filter((a) =>
+        armaPassaFiltroCalibre(a.calibres_id, a.id, calibreFiltro, calibresPorVariacao)
+      );
+    }
+    const termoNome = nomeFiltro.trim().toLowerCase();
+    if (termoNome) {
+      list = list.filter((a) => (a.nome ?? "").toLowerCase().includes(termoNome));
     }
     return list.filter((a) => {
       const minV = minPrecoPorArma.get(a.id);
@@ -398,6 +420,8 @@ function ProdutosPageContent() {
     categoriaFiltro,
     marcaFiltro,
     calibreFiltro,
+    calibresPorVariacao,
+    nomeFiltro,
     precoAplicaFiltro,
     precoFiltroMin,
     precoFiltroMax,
@@ -488,8 +512,22 @@ function ProdutosPageContent() {
                 </div>
                 <div>
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                    Marca, calibre e valor
+                    Modelo, marca, calibre e valor
                   </p>
+                  <div className="mb-6 flex flex-col gap-1.5 sm:max-w-md">
+                    <label htmlFor="filtro-nome" className="text-sm font-medium text-white">
+                      Modelo
+                    </label>
+                    <input
+                      id="filtro-nome"
+                      type="search"
+                      value={nomeFiltro}
+                      onChange={(e) => setNomeFiltro(e.target.value)}
+                      placeholder="Digite o nome do modelo..."
+                      autoComplete="off"
+                      className="w-full rounded-lg border border-zinc-500 bg-zinc-950/80 px-3 py-2.5 text-sm text-white shadow-inner placeholder:text-zinc-500 focus:border-[#E9B20E]/70 focus:outline-none focus:ring-1 focus:ring-[#E9B20E]/35"
+                    />
+                  </div>
                   <div className="flex flex-col gap-8 lg:flex-row lg:items-stretch lg:gap-10 xl:gap-12">
                     <div className="flex w-full shrink-0 flex-col gap-4 sm:max-w-[320px] lg:w-72 lg:max-w-none">
                       <div className="flex flex-col gap-1.5">
@@ -582,9 +620,12 @@ function ProdutosPageContent() {
           ) : (
             <div className="grid auto-rows-fr gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {armasFiltradas.map((arma) => {
-                const calibreNome = arma.calibres_id
-                  ? calibresPorId.get(arma.calibres_id)
-                  : undefined;
+                const calibreNome = calibreExibicaoLista(
+                  arma.calibres_id,
+                  arma.id,
+                  calibresPorId,
+                  calibresPorVariacao
+                );
                 const metaParts = [
                   calibreNome,
                   arma.espec_capacidade_tiros ? `${arma.espec_capacidade_tiros} tiros` : null,

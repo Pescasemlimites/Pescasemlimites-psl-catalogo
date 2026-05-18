@@ -6,6 +6,11 @@ import Header from "../../components/Header";
 import { supabase } from "../../lib/supabaseClient";
 import { useAuth } from "../../contexts/AuthContext";
 import { calcularPrecificacaoArma } from "../../lib/precoCustoMargem";
+import {
+  armaPassaFiltroCalibre,
+  fetchVariacoesMetaPorArmaIds,
+} from "../../lib/fetchVariacoesMinPreco";
+import { emPromocaoValida } from "../../lib/promoPreco";
 
 type Marca = { id: string; nome: string };
 type Calibre = { id: string; nome: string };
@@ -74,6 +79,8 @@ type Variacao = {
   /** Custo desta variação (opcional; se vazio, ações de precificação usam o custo geral da arma) */
   preco_custo: string;
   preco: string;
+  /** Preço promocional desta combinação (variacoes_armas.preco_promocional) */
+  preco_promocional: string;
   caracteristica_acabamento: string;
   fotoFiles?: File[];
   fotoPreviews?: string[];
@@ -118,6 +125,23 @@ function armaFotosExtrasCount(arma: Arma): number {
   return n > 0 ? Math.max(0, n - 1) : 0;
 }
 
+function rotuloVariacaoPromo(
+  v: { calibre_id?: string | null; comprimento_cano?: string | null },
+  calibresPorId: Map<string, string>
+): string {
+  const calibre = v.calibre_id ? calibresPorId.get(v.calibre_id) ?? "?" : "sem calibre";
+  const cano = (v.comprimento_cano ?? "").trim() || "sem cano";
+  return `${calibre} • ${cano}`;
+}
+
+type VariacaoPromoRow = {
+  id: string;
+  preco: number;
+  preco_custo: number | null;
+  calibre_id: string | null;
+  comprimento_cano: string | null;
+};
+
 export default function CadastrosPage() {
   const router = useRouter();
   const { authLoading } = useAuth();
@@ -128,6 +152,9 @@ export default function CadastrosPage() {
   const [funcionamentos, setFuncionamentos] = useState<Funcionamento[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [armas, setArmas] = useState<Arma[]>([]);
+  const [calibresPorVariacao, setCalibresPorVariacao] = useState<Map<string, Set<string>>>(
+    () => new Map()
+  );
   const [form, setForm] = useState<FormArma>(initialForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -147,6 +174,10 @@ export default function CadastrosPage() {
   const [selectedArmaIds, setSelectedArmaIds] = useState<Set<string>>(() => new Set());
   const [bulkMargemStr, setBulkMargemStr] = useState("");
   const [bulkMargemLoading, setBulkMargemLoading] = useState(false);
+  const [bulkPromoMargemStr, setBulkPromoMargemStr] = useState("");
+  const [bulkPromoLoading, setBulkPromoLoading] = useState(false);
+  const [bulkDestaquePromoLoading, setBulkDestaquePromoLoading] = useState(false);
+  const [promoAvisos, setPromoAvisos] = useState<string[]>([]);
   const [comVariacao, setComVariacao] = useState(false);
   const [variacoes, setVariacoes] = useState<Variacao[]>([]);
   const [activeTab, setActiveTab] = useState<
@@ -464,11 +495,15 @@ export default function CadastrosPage() {
       });
 
       setArmas(armasFormatadas);
+
+      const { calibresPorArma } = await fetchVariacoesMetaPorArmaIds(armaIds);
+      setCalibresPorVariacao(calibresPorArma);
     } catch (err: any) {
       setMessage({
         type: "error",
         text: err?.message || "Erro ao carregar armas",
       });
+      setCalibresPorVariacao(new Map());
     } finally {
       setLoading(false);
     }
@@ -572,6 +607,7 @@ export default function CadastrosPage() {
         comprimento_cano: "",
         preco_custo: "",
         preco: "",
+        preco_promocional: "",
         caracteristica_acabamento: "",
         fotoFiles: [],
         fotoPreviews: [],
@@ -695,7 +731,7 @@ export default function CadastrosPage() {
     const [variacoesResult, fotosResult] = await Promise.all([
       supabase
         .from("variacoes_armas")
-        .select("id, calibre_id, comprimento_cano, preco, preco_custo, caracteristica_acabamento")
+        .select("id, calibre_id, comprimento_cano, preco, preco_custo, preco_promocional, caracteristica_acabamento")
         .eq("arma_id", arma.id)
         .order("created_at", { ascending: true }),
       supabase
@@ -739,6 +775,13 @@ export default function CadastrosPage() {
               })
             : "",
         preco: v.preco != null ? Number(v.preco).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "",
+        preco_promocional:
+          v.preco_promocional != null
+            ? Number(v.preco_promocional).toLocaleString("pt-BR", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })
+            : "",
         caracteristica_acabamento: v.caracteristica_acabamento ?? "",
         fotosExistentes: fotosPorVariacao.get(v.id) || [],
         fotosParaRemover: [] as string[],
@@ -798,6 +841,12 @@ export default function CadastrosPage() {
 
   const formatPrecoBr = (n: number) =>
     n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const precoPromocionalVariacaoParaDb = (v: Variacao): number | null => {
+    if (!form.em_promocao) return null;
+    const p = parsePreco(v.preco_promocional);
+    return p != null && p > 0 ? p : null;
+  };
 
   const custoMargemParaDb = (): {
     preco_custo: number | null;
@@ -869,7 +918,14 @@ export default function CadastrosPage() {
         destaque_promocao: false,
       };
     }
-    const precoPromo = parsePreco(form.preco_promocional);
+    const promosVariacoes = variacoes
+      .map((v) => parsePreco(v.preco_promocional))
+      .filter((p): p is number => p != null && p > 0);
+    const precoForm = parsePreco(form.preco_promocional);
+    const precoPromo =
+      comVariacao && promosVariacoes.length > 0
+        ? Math.min(...promosVariacoes)
+        : precoForm;
     return {
       em_promocao: true,
       preco_promocional: precoPromo,
@@ -902,9 +958,21 @@ export default function CadastrosPage() {
       }
 
       if (form.em_promocao) {
-        const precoPromo = parsePreco(form.preco_promocional);
-        if (precoPromo == null || precoPromo <= 0) {
-          setMessage({ type: "error", text: "Informe um preço promocional válido." });
+        const promosVariacoes = comVariacao
+          ? variacoes
+              .map((v) => parsePreco(v.preco_promocional))
+              .filter((p): p is number => p != null && p > 0)
+          : [];
+        const precoPromoForm = parsePreco(form.preco_promocional);
+        const temPromoVariacao = promosVariacoes.length > 0;
+        const temPromoForm = precoPromoForm != null && precoPromoForm > 0;
+        if (!temPromoVariacao && !temPromoForm) {
+          setMessage({
+            type: "error",
+            text: comVariacao
+              ? "Informe o preço promocional no produto ou em pelo menos uma variação."
+              : "Informe um preço promocional válido.",
+          });
           setSubmitLoading(false);
           return;
         }
@@ -976,6 +1044,7 @@ export default function CadastrosPage() {
               const c = parsePreco(v.preco_custo);
               return c != null && c >= 0 ? c : null;
             })();
+            const precoPromoVarDb = precoPromocionalVariacaoParaDb(v);
             let variacaoId: string;
             if (v.id) {
               await supabase
@@ -985,6 +1054,7 @@ export default function CadastrosPage() {
                   comprimento_cano: v.comprimento_cano.trim(),
                   preco: precoVar,
                   preco_custo: custoVarDb,
+                  preco_promocional: precoPromoVarDb,
                   caracteristica_acabamento: v.caracteristica_acabamento?.trim() || null,
                 })
                 .eq("id", v.id);
@@ -998,6 +1068,7 @@ export default function CadastrosPage() {
                   comprimento_cano: v.comprimento_cano.trim(),
                   preco: precoVar,
                   preco_custo: custoVarDb,
+                  preco_promocional: precoPromoVarDb,
                   caracteristica_acabamento: v.caracteristica_acabamento?.trim() || null,
                 })
                 .select("id")
@@ -1079,6 +1150,7 @@ export default function CadastrosPage() {
               const c = parsePreco(v.preco_custo);
               return c != null && c >= 0 ? c : null;
             })();
+            const precoPromoVarDb = precoPromocionalVariacaoParaDb(v);
             const { data: varRow, error: varErr } = await supabase
               .from("variacoes_armas")
               .insert({
@@ -1087,6 +1159,7 @@ export default function CadastrosPage() {
                 comprimento_cano: v.comprimento_cano.trim(),
                 preco: precoVar,
                 preco_custo: custoVarDb,
+                preco_promocional: precoPromoVarDb,
                 caracteristica_acabamento: v.caracteristica_acabamento?.trim() || null,
               })
               .select("id")
@@ -1362,7 +1435,9 @@ export default function CadastrosPage() {
   // Filtrar armas baseado nos filtros
   const armasFiltradas = armas.filter((arma) => {
     const matchMarca = !filtroMarca || arma.marca_id === filtroMarca;
-    const matchCalibre = !filtroCalibre || arma.calibres_id === filtroCalibre;
+    const matchCalibre =
+      !filtroCalibre ||
+      armaPassaFiltroCalibre(arma.calibres_id, arma.id, filtroCalibre, calibresPorVariacao);
     const matchNome = !filtroNome || (arma.nome || "").toLowerCase().includes(filtroNome.toLowerCase());
     return matchMarca && matchCalibre && matchNome;
   });
@@ -1421,6 +1496,237 @@ export default function CadastrosPage() {
       });
     } finally {
       setBulkMargemLoading(false);
+    }
+  };
+
+  const destacarTodasPromocoesNaHome = async () => {
+    setBulkDestaquePromoLoading(true);
+    setMessage(null);
+    try {
+      const { data, error } = await supabase
+        .from("armas")
+        .select("id, em_promocao, preco_promocional")
+        .eq("em_promocao", true)
+        .not("preco_promocional", "is", null);
+
+      if (error) throw error;
+
+      const ids = (data || []).filter((a) => emPromocaoValida(a)).map((a) => a.id);
+      if (ids.length === 0) {
+        setMessage({
+          type: "error",
+          text: "Nenhum produto com promoção ativa e preço promocional válido.",
+        });
+        return;
+      }
+
+      const { error: updErr } = await supabase
+        .from("armas")
+        .update({ destaque_promocao: true })
+        .in("id", ids);
+
+      if (updErr) throw updErr;
+
+      setMessage({
+        type: "ok",
+        text: `${ids.length} promoção(ões) destacada(s) no banner da página inicial.`,
+      });
+      await fetchArmas();
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === "object" && "message" in err
+          ? String((err as { message: string }).message)
+          : "Erro ao destacar promoções.";
+      setMessage({ type: "error", text: msg });
+    } finally {
+      setBulkDestaquePromoLoading(false);
+    }
+  };
+
+  const aplicarPromocaoAvistaEmMassa = async () => {
+    const ids = [...selectedArmaIds];
+    if (ids.length === 0) {
+      setMessage({ type: "error", text: "Selecione pelo menos uma arma." });
+      return;
+    }
+    const margemAvista = parsePreco(bulkPromoMargemStr);
+    if (margemAvista == null || margemAvista < 0) {
+      setMessage({
+        type: "error",
+        text: "Informe um % de lucro à vista válido (número ≥ 0).",
+      });
+      return;
+    }
+    const pctS = parsePreco(tributacao.pctSimplesStr) ?? 0;
+    const pctD = parsePreco(tributacao.pctDifalStr) ?? 0;
+
+    setBulkPromoLoading(true);
+    setMessage(null);
+    setPromoAvisos([]);
+    try {
+      const [{ data: armasData, error: armasErr }, { data: varsData, error: varsErr }] =
+        await Promise.all([
+          supabase.from("armas").select("id, nome, preco_custo, preco").in("id", ids),
+          supabase
+            .from("variacoes_armas")
+            .select("id, arma_id, preco, preco_custo, calibre_id, comprimento_cano")
+            .in("arma_id", ids),
+        ]);
+      if (armasErr) throw armasErr;
+      if (varsErr) throw varsErr;
+
+      const calibresPorId = new Map(calibres.map((c) => [c.id, c.nome]));
+      const armasMap = new Map((armasData || []).map((a) => [a.id, a]));
+      const varsByArma = new Map<string, VariacaoPromoRow[]>();
+      (varsData || []).forEach((v) => {
+        const preco = Number(v.preco);
+        if (!Number.isFinite(preco)) return;
+        const list = varsByArma.get(v.arma_id) || [];
+        list.push({
+          id: v.id,
+          preco,
+          preco_custo: v.preco_custo != null ? Number(v.preco_custo) : null,
+          calibre_id: v.calibre_id ?? null,
+          comprimento_cano: v.comprimento_cano ?? null,
+        });
+        varsByArma.set(v.arma_id, list);
+      });
+
+      const calcPromo = (custo: number) =>
+        calcularPrecificacaoArma(custo, pctS, pctD, margemAvista).precoSugerido;
+
+      const avisos: string[] = [];
+      let promovidas = 0;
+      let ignoradas = 0;
+
+      for (const id of ids) {
+        const arma = armasMap.get(id);
+        if (!arma) {
+          ignoradas++;
+          continue;
+        }
+        const armaNome =
+          typeof arma.nome === "string" && arma.nome.trim()
+            ? arma.nome.trim()
+            : `Produto ${id.slice(0, 8)}`;
+        const custoArma =
+          arma.preco_custo != null && Number(arma.preco_custo) >= 0
+            ? Number(arma.preco_custo)
+            : null;
+        const vars = varsByArma.get(id) || [];
+
+        if (vars.length > 0) {
+          const promosVar: number[] = [];
+          let varsComCusto = 0;
+
+          for (const v of vars) {
+            const custo =
+              v.preco_custo != null && Number.isFinite(v.preco_custo) && v.preco_custo >= 0
+                ? v.preco_custo
+                : null;
+
+            if (custo == null) {
+              avisos.push(
+                `${armaNome} — variação ${rotuloVariacaoPromo(v, calibresPorId)} não entrou na promoção: informe o custo desta variação.`
+              );
+              continue;
+            }
+
+            varsComCusto++;
+            const promo = calcPromo(custo);
+            if (promo <= 0 || promo >= v.preco) continue;
+
+            promosVar.push(promo);
+            const { error: varErr } = await supabase
+              .from("variacoes_armas")
+              .update({ preco_promocional: promo })
+              .eq("id", v.id);
+            if (varErr) throw varErr;
+          }
+
+          if (promosVar.length === 0) {
+            ignoradas++;
+            if (varsComCusto === 0) {
+              avisos.push(
+                `${armaNome} — não foi adicionado à promoção: nenhuma variação possui custo cadastrado.`
+              );
+            } else {
+              avisos.push(
+                `${armaNome} — não foi adicionado à promoção: o preço promocional não ficou menor que o preço de venda em nenhuma variação com custo.`
+              );
+            }
+            continue;
+          }
+
+          const minPromo = Math.min(...promosVar);
+          const { error: armaErr } = await supabase
+            .from("armas")
+            .update({
+              em_promocao: true,
+              preco_promocional: minPromo,
+              promocao_modo: "avista",
+              promocao_parcelas_max: null,
+            })
+            .eq("id", id);
+          if (armaErr) throw armaErr;
+          promovidas++;
+        } else {
+          if (custoArma == null) {
+            ignoradas++;
+            avisos.push(
+              `${armaNome} — não foi adicionado à promoção: informe o custo do produto.`
+            );
+            continue;
+          }
+          const precoRegular =
+            arma.preco != null && Number(arma.preco) > 0 ? Number(arma.preco) : null;
+          const promo = calcPromo(custoArma);
+          if (promo <= 0 || (precoRegular != null && promo >= precoRegular)) {
+            ignoradas++;
+            avisos.push(
+              `${armaNome} — não foi adicionado à promoção: o preço promocional não ficou menor que o preço de venda.`
+            );
+            continue;
+          }
+          const { error: armaErr } = await supabase
+            .from("armas")
+            .update({
+              em_promocao: true,
+              preco_promocional: promo,
+              promocao_modo: "avista",
+              promocao_parcelas_max: null,
+            })
+            .eq("id", id);
+          if (armaErr) throw armaErr;
+          promovidas++;
+        }
+      }
+
+      setPromoAvisos(avisos);
+      const margemTxt = margemAvista.toLocaleString("pt-BR");
+      let textoResumo = `Promoção à vista (${margemTxt}% lucro) aplicada a ${promovidas} produto(s).`;
+      if (ignoradas > 0) {
+        textoResumo += ` ${ignoradas} produto(s) ignorado(s).`;
+      }
+      if (avisos.length > 0) {
+        textoResumo += " Veja os avisos abaixo.";
+      }
+      setMessage({
+        type: promovidas === 0 && avisos.length > 0 ? "error" : "ok",
+        text: textoResumo,
+      });
+      setBulkPromoMargemStr("");
+      setSelectedArmaIds(new Set());
+      await fetchArmas();
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === "object" && "message" in err
+          ? String((err as { message: string }).message)
+          : "Erro ao aplicar promoção em massa.";
+      setMessage({ type: "error", text: msg });
+      setPromoAvisos([]);
+    } finally {
+      setBulkPromoLoading(false);
     }
   };
 
@@ -1530,8 +1836,40 @@ export default function CadastrosPage() {
     ).precoSugerido;
   };
 
+  const aplicarCustoGeralEmTodasVariacoes = () => {
+    if (variacoes.length === 0) return;
+    if (custoParsedModal == null || custoParsedModal < 0) {
+      setMessage({
+        type: "error",
+        text: "Informe um preço de custo geral válido no bloco Custo, impostos e lucro.",
+      });
+      return;
+    }
+    const formatado = formatPrecoBr(custoParsedModal);
+    setVariacoes((prev) => prev.map((v) => ({ ...v, preco_custo: formatado })));
+    setMessage(null);
+  };
+
+  const podeAplicarCustoGeralVariacoes =
+    variacoes.length > 0 && custoParsedModal != null && custoParsedModal >= 0;
+
   const mostrarBlocoPrecificacao =
     precificacaoModal != null || (comVariacao && podeUsarMargemVariacoes);
+
+  const calibresPorIdModal = useMemo(
+    () => new Map(calibres.map((c) => [c.id, c.nome])),
+    [calibres]
+  );
+
+  const resumoPromoVariacoes = useMemo(() => {
+    if (!comVariacao || variacoes.length === 0) return [];
+    return variacoes.map((v, idx) => ({
+      idx,
+      rotulo: rotuloVariacaoPromo(v, calibresPorIdModal),
+      precoVenda: parsePreco(v.preco),
+      precoPromo: parsePreco(v.preco_promocional),
+    }));
+  }, [comVariacao, variacoes, calibresPorIdModal]);
 
   const fotosExistentesSorted = useMemo(
     () => [...fotosExistentes].sort((a, b) => a.ordem - b.ordem),
@@ -2038,6 +2376,27 @@ export default function CadastrosPage() {
               </div>
 
               {!loading && armas.length > 0 && (
+                <div className="mb-6 flex flex-col gap-3 rounded-xl border border-[#E9B20E]/25 bg-[#E9B20E]/5 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-zinc-200">Banner de promoções na home</p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Marca todos os produtos em promoção para o carrossel abaixo de &quot;Explorar catálogo&quot; na
+                      página inicial.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={bulkDestaquePromoLoading || bulkMargemLoading || bulkPromoLoading}
+                    onClick={destacarTodasPromocoesNaHome}
+                    className="shrink-0 rounded-lg px-4 py-2.5 text-sm font-medium text-zinc-900 disabled:opacity-50"
+                    style={{ backgroundColor: "#E9B20E" }}
+                  >
+                    {bulkDestaquePromoLoading ? "Aplicando…" : "Destacar todas as promoções"}
+                  </button>
+                </div>
+              )}
+
+              {!loading && armas.length > 0 && (
                 <div className="mb-6 flex flex-col gap-4 rounded-2xl border border-zinc-700/60 bg-zinc-950/30 p-5 sm:flex-row sm:flex-wrap sm:items-end">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm text-zinc-400">
@@ -2083,15 +2442,63 @@ export default function CadastrosPage() {
                       </div>
                       <button
                         type="button"
-                        disabled={bulkMargemLoading}
+                        disabled={bulkMargemLoading || bulkPromoLoading}
                         onClick={aplicarMargemEmMassa}
                         className="rounded-lg px-4 py-2.5 text-sm font-medium text-zinc-900 disabled:opacity-50"
                         style={{ backgroundColor: "#E9B20E" }}
                       >
-                        {bulkMargemLoading ? "Aplicando…" : "Aplicar aos selecionados"}
+                        {bulkMargemLoading ? "Aplicando…" : "Aplicar margem"}
                       </button>
+                      <div className="mt-3 flex w-full flex-wrap items-end gap-2 rounded-xl border border-rose-900/50 bg-rose-950/20 px-3 py-3 sm:mt-0 sm:ml-2 sm:flex-1">
+                        <div className="min-w-[12rem] flex-1">
+                          <label htmlFor="bulk-promo-margem" className={labelClass}>
+                            % lucro à vista (promoção)
+                          </label>
+                          <p className="mb-2 text-xs text-zinc-500">
+                            Usa o custo de cada variação (sem usar o custo geral). Custo + impostos + este % de lucro; só
+                            aplica se ficar menor que o preço de venda.
+                          </p>
+                          <input
+                            id="bulk-promo-margem"
+                            type="text"
+                            inputMode="decimal"
+                            value={bulkPromoMargemStr}
+                            onChange={(e) => setBulkPromoMargemStr(e.target.value)}
+                            className={`${inputClass} w-36`}
+                            placeholder="ex.: 5"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={bulkPromoLoading || bulkMargemLoading}
+                          onClick={aplicarPromocaoAvistaEmMassa}
+                          className="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+                        >
+                          {bulkPromoLoading ? "Aplicando…" : "Aplicar promo à vista"}
+                        </button>
+                      </div>
                     </div>
                   ) : null}
+                </div>
+              )}
+
+              {promoAvisos.length > 0 && (
+                <div className="mb-6 rounded-xl border border-amber-700/50 bg-amber-950/30 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium text-amber-100">Avisos da promoção em massa</p>
+                    <button
+                      type="button"
+                      onClick={() => setPromoAvisos([])}
+                      className="rounded-lg px-2 py-1 text-xs font-medium text-amber-200/90 hover:bg-amber-900/40"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                  <ul className="max-h-48 list-disc space-y-1 overflow-y-auto pl-5 text-sm text-amber-100/90">
+                    {promoAvisos.map((texto, i) => (
+                      <li key={i}>{texto}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
@@ -2864,24 +3271,35 @@ export default function CadastrosPage() {
                             Informe o <strong className="text-zinc-300">% de lucro</strong> acima. Para ver o resumo com números (custo geral), preencha também o custo geral. Cada variação pode ter custo próprio nos cartões abaixo; na falta de custo na variação, usa-se o custo geral.
                           </p>
                         )}
-                        {comVariacao && podeUsarMargemVariacoes ? (
+                        {comVariacao && variacoes.length > 0 ? (
                           <div className="flex flex-wrap gap-2 border-t border-zinc-700/80 pt-2">
                             <button
                               type="button"
-                              className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-900"
-                              style={{ backgroundColor: "#E9B20E" }}
-                              onClick={() => {
-                                setVariacoes((prev) =>
-                                  prev.map((v) => {
-                                    const sug = precoSugeridoParaVariacao(v);
-                                    if (sug == null) return v;
-                                    return { ...v, preco: formatPrecoBr(sug) };
-                                  })
-                                );
-                              }}
+                              disabled={!podeAplicarCustoGeralVariacoes}
+                              className="rounded-lg border border-zinc-600 bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              title="Copia o custo geral para o campo de custo de cada variação"
+                              onClick={aplicarCustoGeralEmTodasVariacoes}
                             >
-                              Aplicar sugerido em todas as variações
+                              Aplicar custo geral em todas as variações
                             </button>
+                            {podeUsarMargemVariacoes ? (
+                              <button
+                                type="button"
+                                className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-900"
+                                style={{ backgroundColor: "#E9B20E" }}
+                                onClick={() => {
+                                  setVariacoes((prev) =>
+                                    prev.map((v) => {
+                                      const sug = precoSugeridoParaVariacao(v);
+                                      if (sug == null) return v;
+                                      return { ...v, preco: formatPrecoBr(sug) };
+                                    })
+                                  );
+                                }}
+                              >
+                                Aplicar sugerido em todas as variações
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -2931,8 +3349,13 @@ export default function CadastrosPage() {
                           setForm((prev) => ({
                             ...prev,
                             em_promocao: checked,
-                            ...(!checked ? { destaque_promocao: false } : {}),
+                            ...(!checked ? { destaque_promocao: false, preco_promocional: "" } : {}),
                           }));
+                          if (!checked && comVariacao) {
+                            setVariacoes((prev) =>
+                              prev.map((v) => ({ ...v, preco_promocional: "" }))
+                            );
+                          }
                           setMessage(null);
                         }}
                         className="h-5 w-5 rounded border-zinc-600 bg-zinc-800/50 text-[#E9B20E] focus:ring-1 focus:ring-[#E9B20E]"
@@ -2945,8 +3368,14 @@ export default function CadastrosPage() {
                       <>
                         <div>
                           <label htmlFor="preco_promocional" className={labelClass}>
-                            Preço promocional (R$)
+                            Preço promocional do produto (R$)
                           </label>
+                          {comVariacao && variacoes.length > 0 ? (
+                            <p className="mb-2 text-xs text-zinc-500">
+                              Usado na listagem quando não houver promo por variação. Se houver valores nas
+                              variações abaixo, salva o <strong className="text-zinc-400">menor</strong> entre elas.
+                            </p>
+                          ) : null}
                           <input
                             id="preco_promocional"
                             name="preco_promocional"
@@ -2957,6 +3386,36 @@ export default function CadastrosPage() {
                             placeholder="0,00"
                           />
                         </div>
+                        {comVariacao && resumoPromoVariacoes.length > 0 ? (
+                          <div className="overflow-x-auto rounded-lg border border-zinc-700/60">
+                            <table className="w-full min-w-[320px] text-left text-sm">
+                              <thead className="border-b border-zinc-700/80 bg-zinc-950/50 text-xs uppercase tracking-wide text-zinc-500">
+                                <tr>
+                                  <th className="px-3 py-2 font-medium">Variação</th>
+                                  <th className="px-3 py-2 font-medium">Venda</th>
+                                  <th className="px-3 py-2 font-medium">Promo</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-zinc-800/80">
+                                {resumoPromoVariacoes.map((row) => (
+                                  <tr key={row.idx} className="text-zinc-300">
+                                    <td className="px-3 py-2">{row.rotulo}</td>
+                                    <td className="px-3 py-2 tabular-nums text-zinc-400">
+                                      {row.precoVenda != null
+                                        ? `R$ ${formatPrecoBr(row.precoVenda)}`
+                                        : "—"}
+                                    </td>
+                                    <td className="px-3 py-2 tabular-nums text-rose-300/90">
+                                      {row.precoPromo != null
+                                        ? `R$ ${formatPrecoBr(row.precoPromo)}`
+                                        : "—"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : null}
                         <fieldset className="space-y-2">
                           <legend className={`${labelClass} mb-2`}>Condição da promoção</legend>
                           <div className="flex flex-wrap gap-4">
@@ -3031,14 +3490,25 @@ export default function CadastrosPage() {
                         Calibre, cano, valores e foto principal por opção.
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={addVariacao}
-                      className="shrink-0 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors"
-                      style={{ backgroundColor: "#E9B20E", color: "#030711" }}
-                    >
-                      + Adicionar variação
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={!podeAplicarCustoGeralVariacoes}
+                        onClick={aplicarCustoGeralEmTodasVariacoes}
+                        className="shrink-0 rounded-xl border border-zinc-600 bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        title="Usa o preço de custo geral do bloco Custo, impostos e lucro"
+                      >
+                        Aplicar custo geral em todas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={addVariacao}
+                        className="shrink-0 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors"
+                        style={{ backgroundColor: "#E9B20E", color: "#030711" }}
+                      >
+                        + Adicionar variação
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-8">
                     {variacoes.map((v, idx) => {
@@ -3067,7 +3537,7 @@ export default function CadastrosPage() {
                             Remover
                           </button>
                         </div>
-                        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
+                        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                           <div>
                             <label className={labelClass}>Calibre</label>
                             <select
@@ -3110,6 +3580,26 @@ export default function CadastrosPage() {
                               onChange={(e) => updateVariacao(idx, "preco", e.target.value)}
                               className={inputClass}
                               placeholder="0,00"
+                            />
+                          </div>
+                          <div>
+                            <label className={labelClass}>
+                              Preço promocional (R$)
+                              {!form.em_promocao ? (
+                                <span className="ml-1 font-normal text-zinc-500">(ative a promoção)</span>
+                              ) : null}
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={v.preco_promocional}
+                              onChange={(e) =>
+                                updateVariacao(idx, "preco_promocional", e.target.value)
+                              }
+                              disabled={!form.em_promocao}
+                              readOnly={!form.em_promocao}
+                              className={`${inputClass} disabled:cursor-not-allowed disabled:opacity-50`}
+                              placeholder={form.em_promocao ? "0,00" : "—"}
                             />
                           </div>
                           <div>

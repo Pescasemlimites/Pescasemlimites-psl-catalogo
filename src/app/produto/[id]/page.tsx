@@ -43,6 +43,7 @@ type Variacao = {
   calibre_id: string | null;
   comprimento_cano: string;
   preco: number;
+  preco_promocional?: number | null;
   caracteristica_acabamento: string | null;
   calibre: { nome: string } | null;
 };
@@ -139,7 +140,7 @@ export default function ProdutoPage() {
         // Buscar variações do produto (calibre + cano + preço + acabamento)
         const { data: variacoesData, error: variacoesError } = await supabase
           .from("variacoes_armas")
-          .select("id, calibre_id, comprimento_cano, preco, caracteristica_acabamento")
+          .select("id, calibre_id, comprimento_cano, preco, preco_promocional, caracteristica_acabamento")
           .eq("arma_id", produtoId)
           .order("comprimento_cano");
 
@@ -156,6 +157,7 @@ export default function ProdutoPage() {
             calibre_id: string | null;
             comprimento_cano: string;
             preco: string | number;
+            preco_promocional?: string | number | null;
             caracteristica_acabamento?: string | null;
           }[];
           const calibreIds = [...new Set(rows.map((v) => v.calibre_id).filter(Boolean))] as string[];
@@ -171,6 +173,8 @@ export default function ProdutoPage() {
               calibre_id: v.calibre_id,
               comprimento_cano: v.comprimento_cano,
               preco: parseFloat(String(v.preco)),
+              preco_promocional:
+                v.preco_promocional != null ? parseFloat(String(v.preco_promocional)) : null,
               caracteristica_acabamento: v.caracteristica_acabamento ?? null,
               calibre: v.calibre_id && calibresMap.has(v.calibre_id) ? { nome: calibresMap.get(v.calibre_id)! } : null,
             });
@@ -242,8 +246,17 @@ export default function ProdutoPage() {
   const selectedVariacao = variacoes.find((v) => v.id === selectedVariacaoId) ?? null;
   const precoAtual = selectedVariacao != null ? selectedVariacao.preco : (produto?.preco ?? null);
   const promocaoAtiva = produto != null && emPromocaoValida(produto);
+  const precoPromoVariacao =
+    selectedVariacao?.preco_promocional != null &&
+    Number(selectedVariacao.preco_promocional) > 0
+      ? Number(selectedVariacao.preco_promocional)
+      : null;
   const precoPromocional =
-    promocaoAtiva && produto?.preco_promocional != null ? Number(produto.preco_promocional) : null;
+    promocaoAtiva && precoPromoVariacao != null
+      ? precoPromoVariacao
+      : promocaoAtiva && produto?.preco_promocional != null
+        ? Number(produto.preco_promocional)
+        : null;
   const precoVitrine = precoPromocional != null ? precoPromocional : precoAtual;
   const calibreAtual = selectedVariacao != null ? selectedVariacao.calibre : produto?.calibre ?? null;
   const comprimentoCanoAtual = selectedVariacao != null ? selectedVariacao.comprimento_cano : (produto?.espec_comprimento_cano ?? null);

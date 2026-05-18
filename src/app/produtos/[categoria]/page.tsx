@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Header from "../../../components/Header";
 import ProductListCard from "../../../components/ProductListCard";
 import { supabase } from "../../../lib/supabaseClient";
+import {
+  armaPassaFiltroCalibre,
+  calibreExibicaoLista,
+  fetchVariacoesMetaPorArmaIds,
+} from "../../../lib/fetchVariacoesMinPreco";
 import { useAuth } from "../../../contexts/AuthContext";
 
 type Arma = {
@@ -69,6 +74,9 @@ export default function ProdutosPorCategoriaPage() {
   const [armas, setArmas] = useState<Arma[]>([]);
   const [armasFiltradas, setArmasFiltradas] = useState<Arma[]>([]);
   const [minPrecoPorArma, setMinPrecoPorArma] = useState<Map<string, number>>(new Map());
+  const [calibresPorVariacao, setCalibresPorVariacao] = useState<Map<string, Set<string>>>(
+    new Map()
+  );
   const [nomeCategoria, setNomeCategoria] = useState<string>(`Categoria ${categoriaId}`);
   const [error, setError] = useState<string | null>(null);
   
@@ -77,6 +85,7 @@ export default function ProdutosPorCategoriaPage() {
   const [calibres, setCalibres] = useState<Calibre[]>([]);
   const [marcaSelecionada, setMarcaSelecionada] = useState<string | null>(null);
   const [calibreSelecionado, setCalibreSelecionado] = useState<string | null>(null);
+  const [nomeBusca, setNomeBusca] = useState("");
   const [dropdownMarcaAberto, setDropdownMarcaAberto] = useState(false);
   const [dropdownCalibreAberto, setDropdownCalibreAberto] = useState(false);
   
@@ -132,14 +141,23 @@ export default function ProdutosPorCategoriaPage() {
     }
 
     if (calibreSelecionado) {
-      filtradas = filtradas.filter((arma) => {
-        const calibreId = arma.calibre_id || arma.calibres_id;
-        return calibreId === calibreSelecionado;
-      });
+      filtradas = filtradas.filter((arma) =>
+        armaPassaFiltroCalibre(
+          arma.calibre_id || arma.calibres_id,
+          arma.id,
+          calibreSelecionado,
+          calibresPorVariacao
+        )
+      );
+    }
+
+    const termoNome = nomeBusca.trim().toLowerCase();
+    if (termoNome) {
+      filtradas = filtradas.filter((arma) => (arma.nome ?? "").toLowerCase().includes(termoNome));
     }
 
     setArmasFiltradas(filtradas);
-  }, [armas, marcaSelecionada, calibreSelecionado]);
+  }, [armas, marcaSelecionada, calibreSelecionado, nomeBusca, calibresPorVariacao]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -231,19 +249,9 @@ export default function ProdutosPorCategoriaPage() {
           });
 
           const idsFmt = armasFormatadas.map((a) => a.id);
-          const minMap = new Map<string, number>();
-          if (idsFmt.length > 0) {
-            const { data: varsCat } = await supabase
-              .from("variacoes_armas")
-              .select("arma_id, preco")
-              .in("arma_id", idsFmt);
-            (varsCat || []).forEach((v: { arma_id: string; preco: number }) => {
-              const p = parseFloat(String(v.preco));
-              const cur = minMap.get(v.arma_id);
-              if (cur == null || p < cur) minMap.set(v.arma_id, p);
-            });
-          }
-          setMinPrecoPorArma(minMap);
+          const { minPreco, calibresPorArma } = await fetchVariacoesMetaPorArmaIds(idsFmt);
+          setMinPrecoPorArma(minPreco);
+          setCalibresPorVariacao(calibresPorArma);
 
           setArmas(armasFormatadas);
           setArmasFiltradas(armasFormatadas);
@@ -272,7 +280,13 @@ export default function ProdutosPorCategoriaPage() {
   const limparFiltros = () => {
     setMarcaSelecionada(null);
     setCalibreSelecionado(null);
+    setNomeBusca("");
   };
+
+  const calibresPorId = useMemo(
+    () => new Map(calibres.map((c) => [c.id, c.nome])),
+    [calibres]
+  );
 
   if (authLoading || loading) {
     return (
@@ -323,7 +337,7 @@ export default function ProdutosPorCategoriaPage() {
             </p>
             <h1 className="text-3xl font-bold tracking-tight text-white md:text-4xl">{nomeCategoria}</h1>
             <p className="mt-3 max-w-2xl text-sm text-zinc-400">
-              Filtre por marca ou calibre para refinar a lista.
+              Busque pelo nome do modelo ou filtre por marca e calibre.
             </p>
           </header>
 
@@ -331,7 +345,7 @@ export default function ProdutosPorCategoriaPage() {
           <div className="mb-10 rounded-2xl border border-zinc-700/60 bg-zinc-900/40 p-4 shadow-inner sm:p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm font-medium text-zinc-200">Filtros</p>
-              {(marcaSelecionada || calibreSelecionado) && (
+              {(marcaSelecionada || calibreSelecionado || nomeBusca.trim()) && (
                 <button
                   type="button"
                   onClick={limparFiltros}
@@ -340,6 +354,20 @@ export default function ProdutosPorCategoriaPage() {
                   Limpar filtros
                 </button>
               )}
+            </div>
+            <div className="mb-4 flex flex-col gap-1.5 sm:max-w-md">
+              <label htmlFor="filtro-nome-categoria" className="text-sm font-medium text-zinc-200">
+                Modelo
+              </label>
+              <input
+                id="filtro-nome-categoria"
+                type="search"
+                value={nomeBusca}
+                onChange={(e) => setNomeBusca(e.target.value)}
+                placeholder="Digite o nome do modelo..."
+                autoComplete="off"
+                className="w-full rounded-lg border border-zinc-600 bg-zinc-950/80 px-3 py-2.5 text-sm text-white placeholder:text-zinc-500 focus:border-[#E9B20E]/70 focus:outline-none focus:ring-1 focus:ring-[#E9B20E]/35"
+              />
             </div>
             <div className="flex flex-wrap gap-3">
               {/* Dropdown Marca */}
@@ -468,8 +496,14 @@ export default function ProdutosPorCategoriaPage() {
               </p>
               <div className="grid auto-rows-fr gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {armasFiltradas.map((arma) => {
+                  const calibreNome = calibreExibicaoLista(
+                    arma.calibre_id || arma.calibres_id,
+                    arma.id,
+                    calibresPorId,
+                    calibresPorVariacao
+                  );
                   const metaParts = [
-                    arma.calibre?.nome,
+                    calibreNome ?? arma.calibre?.nome,
                     arma.espec_capacidade_tiros
                       ? `${arma.espec_capacidade_tiros} tiros`
                       : null,

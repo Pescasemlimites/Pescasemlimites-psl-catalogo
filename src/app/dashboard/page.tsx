@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Header from "../../components/Header";
 import Footer from "../../components/Footer";
@@ -92,43 +92,23 @@ function PromoBannerBigCard({
   );
 }
 
-function PromoCarouselModal({
-  open,
-  onClose,
+function InlineProductCarousel({
   items,
-  minPrecoByArmaId,
-  onVerProduto,
+  ariaLabel,
+  prevAriaLabel = "Anterior",
+  nextAriaLabel = "Próximo",
+  dotAriaLabel = (i: number) => `Ir para item ${i + 1}`,
+  renderSlide,
 }: {
-  open: boolean;
-  onClose: () => void;
   items: ArmaDestaque[];
-  minPrecoByArmaId: Map<string, number>;
-  onVerProduto: (id: string) => void;
+  ariaLabel: string;
+  prevAriaLabel?: string;
+  nextAriaLabel?: string;
+  dotAriaLabel?: (index: number) => string;
+  renderSlide: (arma: ArmaDestaque) => ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
-
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (open) setActive(0);
-  }, [open, items.length]);
 
   const scrollByDir = (dir: -1 | 1) => {
     const el = scrollRef.current;
@@ -144,89 +124,66 @@ function PromoCarouselModal({
     setActive(Math.min(items.length - 1, Math.max(0, i)));
   };
 
-  if (!open || items.length === 0) return null;
+  if (items.length === 0) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3 sm:p-6"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Promoções"
-      onClick={onClose}
-    >
-      <div className="relative w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute -top-10 right-0 z-20 rounded-full bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-zinc-700 sm:-top-2 sm:right-2"
-        >
-          Fechar
-        </button>
-        <p className="mb-3 text-center text-sm text-zinc-300">
-          Arraste para o lado <span className="text-zinc-500">(ou use as setas)</span> para ver cada arma
-        </p>
-
-        <div className="relative">
-          {items.length > 1 ? (
-            <>
-              <button
-                type="button"
-                aria-label="Promoção anterior"
-                onClick={() => scrollByDir(-1)}
-                className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:left-2 sm:p-2.5"
-              >
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                aria-label="Próxima promoção"
-                onClick={() => scrollByDir(1)}
-                className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:right-2 sm:p-2.5"
-              >
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-            </>
-          ) : null}
-
-          <div
-            ref={scrollRef}
-            onScroll={onScrollSnap}
-            className="flex max-h-[min(85vh,880px)] snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-2xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          >
-            {items.map((arma) => (
-              <div key={arma.id} className="w-full min-w-full shrink-0 snap-center px-0.5 sm:px-2">
-                <PromoBannerBigCard
-                  arma={arma}
-                  minPrecoVariacao={minPrecoByArmaId.get(arma.id)}
-                  onCardClick={() => onVerProduto(arma.id)}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-
+    <div className="relative mx-auto w-full max-w-4xl" aria-label={ariaLabel}>
+      <div className="relative">
         {items.length > 1 ? (
-          <div className="mt-4 flex justify-center gap-2">
-            {items.map((arma, i) => (
-              <button
-                key={arma.id}
-                type="button"
-                aria-label={`Ir para promoção ${i + 1}`}
-                onClick={() => {
-                  const el = scrollRef.current;
-                  if (!el) return;
-                  el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
-                }}
-                className={`h-2 rounded-full transition-all ${i === active ? "w-8 bg-[#E9B20E]" : "w-2 bg-white/40 hover:bg-white/60"}`}
-              />
-            ))}
-          </div>
+          <>
+            <button
+              type="button"
+              aria-label={prevAriaLabel}
+              onClick={() => scrollByDir(-1)}
+              className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:left-2 sm:p-2.5"
+            >
+              <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              aria-label={nextAriaLabel}
+              onClick={() => scrollByDir(1)}
+              className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:right-2 sm:p-2.5"
+            >
+              <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </>
         ) : null}
+
+        <div
+          ref={scrollRef}
+          onScroll={onScrollSnap}
+          className="flex snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-2xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {items.map((arma) => (
+            <div key={arma.id} className="w-full min-w-full shrink-0 snap-center px-0.5 sm:px-2">
+              {renderSlide(arma)}
+            </div>
+          ))}
+        </div>
       </div>
+
+      {items.length > 1 ? (
+        <div className="mt-4 flex justify-center gap-2">
+          {items.map((arma, i) => (
+            <button
+              key={arma.id}
+              type="button"
+              aria-label={dotAriaLabel(i)}
+              onClick={() => {
+                const el = scrollRef.current;
+                if (!el) return;
+                el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+              }}
+              className={`h-2 rounded-full transition-all ${i === active ? "w-8 bg-[#E9B20E]" : "w-2 bg-white/40 hover:bg-white/60"}`}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -240,7 +197,6 @@ export default function Dashboard() {
   const [minPrecoBannerPromoByArmaId, setMinPrecoBannerPromoByArmaId] = useState<Map<string, number>>(
     new Map()
   );
-  const [promoModalOpen, setPromoModalOpen] = useState(false);
   const [loadingDestaques, setLoadingDestaques] = useState(true);
 
   useEffect(() => {
@@ -530,55 +486,39 @@ export default function Dashboard() {
 
         {armasBannerPromo.length > 0 && emPromocaoValida(armasBannerPromo[0]) && (
           <section className="mt-10 w-full max-w-4xl px-1">
-            {armasBannerPromo.length === 1 ? (
-              <PromoBannerBigCard
-                arma={armasBannerPromo[0]}
-                minPrecoVariacao={minPrecoBannerPromoByArmaId.get(armasBannerPromo[0].id)}
-                onCardClick={() => router.push(`/produto/${armasBannerPromo[0].id}`)}
-              />
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setPromoModalOpen(true)}
-                  className="group flex w-full items-center gap-4 overflow-hidden rounded-2xl border-2 border-[#E9B20E]/85 bg-zinc-900/90 p-4 text-left shadow-xl transition-all hover:border-[#f5d978] sm:gap-5 sm:p-5"
-                >
-                  {(armasBannerPromo[0].primeiraFoto || armasBannerPromo[0].foto_url) && (
-                    <div className="relative size-20 shrink-0 overflow-hidden rounded-lg sm:size-24">
-                      <img
-                        src={armasBannerPromo[0].primeiraFoto || armasBannerPromo[0].foto_url || ""}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                      <div className="absolute left-1 top-1 rounded bg-[#E9B20E] px-1.5 py-0.5 text-[9px] font-black uppercase text-zinc-900">
-                        Promo
-                      </div>
-                    </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-lg font-bold text-white sm:text-xl">
-                      {armasBannerPromo.length} armas em promoção
-                    </p>
-                    <p className="mt-1 text-sm text-zinc-400">
-                      Toque para abrir. No painel, arraste para o lado para ver cada arma.
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-sm font-semibold text-[#E9B20E] group-hover:underline">
-                    Abrir
-                  </span>
-                </button>
-                <PromoCarouselModal
-                  open={promoModalOpen}
-                  onClose={() => setPromoModalOpen(false)}
-                  items={armasBannerPromo}
-                  minPrecoByArmaId={minPrecoBannerPromoByArmaId}
-                  onVerProduto={(id) => {
-                    setPromoModalOpen(false);
-                    router.push(`/produto/${id}`);
-                  }}
+            <div className="mb-6 flex flex-col items-center gap-2 text-center">
+              <div
+                className="flex items-center justify-center rounded-full border px-4 py-2"
+                style={{
+                  borderColor: "rgba(233, 178, 14, 0.5)",
+                  backgroundColor: "rgba(15, 23, 42, 0.5)",
+                }}
+              >
+                <span className="text-sm font-medium" style={{ color: "#E9B20E" }}>
+                  Promoções
+                </span>
+              </div>
+              <h2 className="text-2xl font-bold text-white sm:text-3xl">Armas em promoção</h2>
+              {armasBannerPromo.length > 1 ? (
+                <p className="text-sm text-zinc-500">
+                  Arraste para o lado <span className="text-zinc-600">(ou use as setas)</span> para ver cada arma
+                </p>
+              ) : null}
+            </div>
+            <InlineProductCarousel
+              items={armasBannerPromo}
+              ariaLabel="Armas em promoção"
+              prevAriaLabel="Promoção anterior"
+              nextAriaLabel="Próxima promoção"
+              dotAriaLabel={(i) => `Ir para promoção ${i + 1}`}
+              renderSlide={(arma) => (
+                <PromoBannerBigCard
+                  arma={arma}
+                  minPrecoVariacao={minPrecoBannerPromoByArmaId.get(arma.id)}
+                  onCardClick={() => router.push(`/produto/${arma.id}`)}
                 />
-              </>
-            )}
+              )}
+            />
           </section>
         )}
         </div>

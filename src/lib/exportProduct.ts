@@ -27,6 +27,21 @@ const IMAGE_EXPORT_HEIGHT = 720;
 const IMAGE_EXPORT_BG = '#0a0a0f';
 const IMAGE_EXPORT_ACCENT = '#ffcc00';
 
+const INSTAGRAM_STORY_WIDTH = 1080;
+const INSTAGRAM_STORY_HEIGHT = 1920;
+
+export type InstagramStoryData = {
+  nome: string;
+  foto_url: string | null;
+  marca?: { nome: string } | null;
+  calibre?: { nome: string } | null;
+  espec_capacidade_tiros?: string | null;
+  preco_original?: number | null;
+  preco_promocional?: number | null;
+  promocao_ativa?: boolean;
+  condicao_promocao?: string;
+};
+
 function getProdutoEspecsItems(produto: ProdutoData) {
   return [
     produto.marca && { label: 'Marca', value: produto.marca.nome },
@@ -219,6 +234,234 @@ function buildProductImageExportDom(produto: ProdutoData, logoUrl: string): HTML
   container.appendChild(mainRow);
 
   return container;
+}
+
+function buildInstagramStoryExportDom(data: InstagramStoryData, logoUrl: string): HTMLDivElement {
+  const container = document.createElement('div');
+  container.style.width = `${INSTAGRAM_STORY_WIDTH}px`;
+  container.style.height = `${INSTAGRAM_STORY_HEIGHT}px`;
+  container.style.padding = '48px 40px 56px';
+  container.style.backgroundColor = IMAGE_EXPORT_BG;
+  container.style.color = '#ffffff';
+  container.style.fontFamily = 'Arial, Helvetica, sans-serif';
+  container.style.boxSizing = 'border-box';
+  container.style.display = 'flex';
+  container.style.flexDirection = 'column';
+  container.style.alignItems = 'center';
+  container.style.overflow = 'hidden';
+
+  const logoWrap = document.createElement('div');
+  logoWrap.style.display = 'flex';
+  logoWrap.style.justifyContent = 'center';
+  logoWrap.style.flexShrink = '0';
+  logoWrap.style.marginBottom = '24px';
+  const logoImg = document.createElement('img');
+  logoImg.src = logoUrl;
+  logoImg.style.height = '64px';
+  logoImg.style.objectFit = 'contain';
+  logoImg.style.maxWidth = '480px';
+  logoWrap.appendChild(logoImg);
+  container.appendChild(logoWrap);
+
+  if (data.promocao_ativa) {
+    const badge = document.createElement('div');
+    badge.textContent = 'PROMOÇÃO';
+    badge.style.flexShrink = '0';
+    badge.style.marginBottom = '20px';
+    badge.style.padding = '10px 32px';
+    badge.style.borderRadius = '999px';
+    badge.style.backgroundColor = IMAGE_EXPORT_ACCENT;
+    badge.style.color = '#0a0a0f';
+    badge.style.fontSize = '28px';
+    badge.style.fontWeight = 'bold';
+    badge.style.letterSpacing = '0.08em';
+    container.appendChild(badge);
+  }
+
+  const imageWrap = document.createElement('div');
+  imageWrap.style.flex = '1';
+  imageWrap.style.display = 'flex';
+  imageWrap.style.alignItems = 'center';
+  imageWrap.style.justifyContent = 'center';
+  imageWrap.style.width = '100%';
+  imageWrap.style.minHeight = '0';
+  imageWrap.style.marginBottom = '28px';
+
+  if (data.foto_url) {
+    const fotoImg = document.createElement('img');
+    fotoImg.src = data.foto_url;
+    fotoImg.style.maxWidth = '100%';
+    fotoImg.style.maxHeight = '900px';
+    fotoImg.style.objectFit = 'contain';
+    imageWrap.appendChild(fotoImg);
+  }
+
+  container.appendChild(imageWrap);
+
+  const title = document.createElement('h1');
+  title.textContent = (data.nome || 'Produto').toUpperCase();
+  title.style.margin = '0 0 20px';
+  title.style.fontSize = '40px';
+  title.style.fontWeight = '600';
+  title.style.color = IMAGE_EXPORT_ACCENT;
+  title.style.lineHeight = '1.2';
+  title.style.letterSpacing = '0.03em';
+  title.style.textAlign = 'center';
+  title.style.flexShrink = '0';
+  container.appendChild(title);
+
+  const precoWrap = document.createElement('div');
+  precoWrap.style.flexShrink = '0';
+  precoWrap.style.marginBottom = '32px';
+  precoWrap.style.textAlign = 'center';
+
+  const emPromo =
+    data.promocao_ativa &&
+    data.preco_promocional != null &&
+    data.preco_original != null;
+
+  if (emPromo) {
+    const precoOriginal = document.createElement('div');
+    precoOriginal.textContent = `R$ ${formatPrice(data.preco_original ?? null)}`;
+    precoOriginal.style.fontSize = '32px';
+    precoOriginal.style.color = '#888890';
+    precoOriginal.style.textDecoration = 'line-through';
+    precoOriginal.style.marginBottom = '8px';
+    precoWrap.appendChild(precoOriginal);
+
+    const precoPromo = document.createElement('div');
+    precoPromo.textContent = `R$ ${formatPrice(data.preco_promocional ?? null)}`;
+    precoPromo.style.fontSize = '56px';
+    precoPromo.style.fontWeight = 'bold';
+    precoPromo.style.color = IMAGE_EXPORT_ACCENT;
+    precoWrap.appendChild(precoPromo);
+  } else {
+    const preco = data.preco_promocional ?? data.preco_original;
+    if (preco != null) {
+      const precoLabel = document.createElement('div');
+      precoLabel.textContent = 'Valor à vista';
+      precoLabel.style.fontSize = '22px';
+      precoLabel.style.color = '#a0a0a8';
+      precoLabel.style.marginBottom = '8px';
+      precoWrap.appendChild(precoLabel);
+
+      const precoValor = document.createElement('div');
+      precoValor.textContent = `R$ ${formatPrice(preco)}`;
+      precoValor.style.fontSize = '56px';
+      precoValor.style.fontWeight = 'bold';
+      precoValor.style.color = IMAGE_EXPORT_ACCENT;
+      precoWrap.appendChild(precoValor);
+    }
+  }
+
+  container.appendChild(precoWrap);
+
+  const specsContainer = document.createElement('div');
+  specsContainer.style.flexShrink = '0';
+  specsContainer.style.alignSelf = 'stretch';
+  specsContainer.style.width = '100%';
+  specsContainer.style.boxSizing = 'border-box';
+  specsContainer.style.border = `2px solid ${IMAGE_EXPORT_ACCENT}`;
+  specsContainer.style.borderRadius = '16px';
+  specsContainer.style.padding = '20px 24px';
+  specsContainer.style.backgroundColor = 'rgba(12, 12, 18, 0.92)';
+  specsContainer.style.display = 'grid';
+  specsContainer.style.gridTemplateColumns = '1fr 1fr 1fr';
+  specsContainer.style.gap = '16px';
+  specsContainer.style.marginBottom = '24px';
+
+  const specs = [
+    data.marca?.nome && { label: 'Marca', value: data.marca.nome },
+    data.calibre?.nome && { label: 'Calibre', value: data.calibre.nome },
+    data.espec_capacidade_tiros && { label: 'Tiros', value: data.espec_capacidade_tiros },
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
+
+  specs.forEach((spec) => {
+    const specItem = document.createElement('div');
+    specItem.style.display = 'flex';
+    specItem.style.flexDirection = 'column';
+    specItem.style.alignItems = 'center';
+    specItem.style.gap = '8px';
+    specItem.style.textAlign = 'center';
+
+    const specLabel = document.createElement('span');
+    specLabel.textContent = spec.label;
+    specLabel.style.color = '#b8b8c0';
+    specLabel.style.fontSize = '20px';
+
+    const specValue = document.createElement('span');
+    specValue.textContent = spec.value;
+    specValue.style.color = '#ffffff';
+    specValue.style.fontSize = '24px';
+    specValue.style.fontWeight = 'bold';
+    specValue.style.lineHeight = '1.3';
+
+    specItem.appendChild(specLabel);
+    specItem.appendChild(specValue);
+    specsContainer.appendChild(specItem);
+  });
+
+  container.appendChild(specsContainer);
+
+  const footer = document.createElement('div');
+  footer.style.flexShrink = '0';
+  footer.style.textAlign = 'center';
+  footer.style.marginTop = 'auto';
+
+  if (data.condicao_promocao) {
+    const condicao = document.createElement('div');
+    condicao.textContent = data.condicao_promocao;
+    condicao.style.fontSize = '22px';
+    condicao.style.fontWeight = '600';
+    condicao.style.color = '#e4e4ec';
+    condicao.style.marginBottom = '12px';
+    footer.appendChild(condicao);
+  }
+
+  const loja = document.createElement('div');
+  loja.textContent = 'Pesca Sem Limites';
+  loja.style.fontSize = '20px';
+  loja.style.color = '#888890';
+  footer.appendChild(loja);
+
+  container.appendChild(footer);
+
+  return container;
+}
+
+async function renderDomToJpeg(
+  container: HTMLDivElement,
+  width: number,
+  height: number
+): Promise<HTMLCanvasElement> {
+  container.style.position = 'absolute';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+
+  document.body.appendChild(container);
+
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  const canvas = await html2canvas(container, {
+    backgroundColor: IMAGE_EXPORT_BG,
+    width,
+    height,
+    scale: 1,
+    useCORS: true,
+    logging: false,
+  });
+
+  document.body.removeChild(container);
+
+  return canvas;
+}
+
+function downloadCanvasAsJpeg(canvas: HTMLCanvasElement, filename: string): void {
+  const imgData = canvas.toDataURL('image/jpeg', 0.92);
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = imgData;
+  link.click();
 }
 
 // Função auxiliar para carregar imagem
@@ -422,30 +665,23 @@ export async function exportProductToImage(
   logoUrl: string = '/logo.png'
 ) {
   const container = buildProductImageExportDom(produto, logoUrl);
-  container.style.position = 'absolute';
-  container.style.left = '-9999px';
-  container.style.top = '0';
+  const canvas = await renderDomToJpeg(container, IMAGE_EXPORT_WIDTH, IMAGE_EXPORT_HEIGHT);
+  downloadCanvasAsJpeg(
+    canvas,
+    `${produto.nome?.replace(/[^a-z0-9]/gi, '_') || 'produto'}.jpg`
+  );
+}
 
-  document.body.appendChild(container);
-
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-
-  const canvas = await html2canvas(container, {
-    backgroundColor: IMAGE_EXPORT_BG,
-    width: IMAGE_EXPORT_WIDTH,
-    height: IMAGE_EXPORT_HEIGHT,
-    scale: 1,
-    useCORS: true,
-    logging: false,
-  });
-
-  document.body.removeChild(container);
-
-  const imgData = canvas.toDataURL('image/jpeg', 0.85);
-  const link = document.createElement('a');
-  link.download = `${produto.nome?.replace(/[^a-z0-9]/gi, '_') || 'produto'}.jpg`;
-  link.href = imgData;
-  link.click();
+export async function exportProductToInstagramStory(
+  data: InstagramStoryData,
+  logoUrl: string = '/logo.png'
+): Promise<void> {
+  const container = buildInstagramStoryExportDom(data, logoUrl);
+  const canvas = await renderDomToJpeg(container, INSTAGRAM_STORY_WIDTH, INSTAGRAM_STORY_HEIGHT);
+  downloadCanvasAsJpeg(
+    canvas,
+    `${data.nome?.replace(/[^a-z0-9]/gi, '_') || 'produto'}_story.jpg`
+  );
 }
 
 // Nova função para gerar imagem e compartilhar no WhatsApp
@@ -456,24 +692,7 @@ export async function exportProductToImageAndShare(
   phoneNumber?: string
 ) {
   const container = buildProductImageExportDom(produto, logoUrl);
-  container.style.position = 'absolute';
-  container.style.left = '-9999px';
-  container.style.top = '0';
-
-  document.body.appendChild(container);
-
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-
-  const canvas = await html2canvas(container, {
-    backgroundColor: IMAGE_EXPORT_BG,
-    width: IMAGE_EXPORT_WIDTH,
-    height: IMAGE_EXPORT_HEIGHT,
-    scale: 1,
-    useCORS: true,
-    logging: false,
-  });
-
-  document.body.removeChild(container);
+  const canvas = await renderDomToJpeg(container, IMAGE_EXPORT_WIDTH, IMAGE_EXPORT_HEIGHT);
 
   // Converter para JPEG
   canvas.toBlob(async (blob) => {

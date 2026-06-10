@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Header from "../../../components/Header";
 import { supabase } from "../../../lib/supabaseClient";
-import { exportProductToPDF, exportProductToImage, exportProductToImageAndShare } from "../../../lib/exportProduct";
+import { exportProductToPDF, exportProductToImage, exportProductToImageAndShare, exportProductToInstagramStory } from "../../../lib/exportProduct";
 import { emPromocaoValida, textoCondicaoPromocao } from "../../../lib/promoPreco";
+import { useAuth } from "../../../contexts/AuthContext";
 
 const CLIENTE_VITRINE_EMAIL = "cliente@gmail.com";
 const WHATSAPP_VENDAS_WA_ME = "5554996717871";
@@ -51,6 +52,7 @@ type Variacao = {
 export default function ProdutoPage() {
   const params = useParams();
   const produtoId = params.id as string;
+  const { isAdmin } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [produto, setProduto] = useState<Arma | null>(null);
@@ -61,6 +63,7 @@ export default function ProdutoPage() {
   const [error, setError] = useState<string | null>(null);
   const [showParcelamento, setShowParcelamento] = useState(false);
   const [isClienteVitrine, setIsClienteVitrine] = useState(false);
+  const [exportandoInstagram, setExportandoInstagram] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -308,9 +311,9 @@ export default function ProdutoPage() {
   };
 
   const calcularParcelamento = () => {
-    if (precoVitrine == null) return [];
+    if (precoAtual == null) return [];
 
-    const preco = parseFloat(precoVitrine.toString());
+    const preco = parseFloat(precoAtual.toString());
     const parcelas = [];
 
     // 1x a 4x sem juros
@@ -424,6 +427,28 @@ export default function ProdutoPage() {
     } catch (error) {
       console.error("Erro ao compartilhar no WhatsApp:", error);
       alert("Erro ao compartilhar. Tente novamente.");
+    }
+  };
+
+  const handleExportInstagramStory = async () => {
+    try {
+      setExportandoInstagram(true);
+      await exportProductToInstagramStory({
+        nome: produto.nome,
+        foto_url: fotoAtual?.foto_url || produto.foto_url,
+        marca: produto.marca,
+        calibre: calibreAtual,
+        espec_capacidade_tiros: produto.espec_capacidade_tiros,
+        preco_original: precoAtual,
+        preco_promocional: precoPromocional,
+        promocao_ativa: promocaoAtiva,
+        condicao_promocao: textoCondicaoPromocao(produto.promocao_modo, produto.promocao_parcelas_max),
+      });
+    } catch (error) {
+      console.error("Erro ao gerar Story Instagram:", error);
+      alert("Erro ao gerar imagem. Tente novamente.");
+    } finally {
+      setExportandoInstagram(false);
     }
   };
 
@@ -591,8 +616,8 @@ export default function ProdutoPage() {
                     <p className="mt-2 text-sm font-medium text-zinc-300">
                       {textoCondicaoPromocao(produto.promocao_modo, produto.promocao_parcelas_max)}
                     </p>
-                    <p className="mt-1 text-sm text-zinc-500">
-                      Simulação de parcelamento com base no valor promocional.
+                    <p className="mt-1 text-sm text-zinc-400">
+                      ou em até 4x sem juros ou até 10x com juros (sobre o valor normal)
                     </p>
                   </>
                 ) : (
@@ -665,6 +690,46 @@ export default function ProdutoPage() {
                     />
                   </svg>
                   Exportar PDF
+                </button>
+                )}
+
+                {isAdmin && (
+                <button
+                  className="flex items-center justify-center gap-2 rounded-lg border-2 px-3 py-1.5 text-sm transition-colors disabled:opacity-50"
+                  style={{ borderColor: "#E9B20E", backgroundColor: "transparent" }}
+                  onMouseEnter={(e) => {
+                    if (!exportandoInstagram) {
+                      e.currentTarget.style.backgroundColor = "rgba(233, 178, 14, 0.1)";
+                    }
+                  }}
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.backgroundColor = "transparent")
+                  }
+                  onClick={handleExportInstagramStory}
+                  disabled={exportandoInstagram}
+                >
+                  <svg
+                    className="h-4 w-4"
+                    style={{ color: "#E9B20E" }}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+                    />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+                    />
+                  </svg>
+                  <span className="font-bold" style={{ color: "#E9B20E" }}>
+                    {exportandoInstagram ? "Gerando..." : "Gerar Story Instagram"}
+                  </span>
                 </button>
                 )}
                 
@@ -876,15 +941,20 @@ export default function ProdutoPage() {
             </div>
 
             {/* Valor Total */}
-            {precoVitrine != null && (
+            {precoAtual != null && (
               <div className="mb-6 rounded-lg border border-zinc-700 bg-zinc-800/50 p-4">
                 <p className="text-sm text-zinc-400">Valor para parcelamento</p>
-                {promocaoAtiva && precoAtual != null ? (
-                  <p className="text-sm text-zinc-500 line-through">De R$ {formatPrice(precoAtual)}</p>
-                ) : null}
                 <p className="text-3xl font-bold" style={{ color: "#E9B20E" }}>
-                  R$ {formatPrice(precoVitrine)}
+                  R$ {formatPrice(precoAtual)}
                 </p>
+                {promocaoAtiva && precoPromocional != null ? (
+                  <p className="mt-2 text-sm text-zinc-400">
+                    Promoção à vista:{" "}
+                    <span className="font-semibold text-[#E9B20E]">
+                      R$ {formatPrice(precoPromocional)}
+                    </span>
+                  </p>
+                ) : null}
               </div>
             )}
 

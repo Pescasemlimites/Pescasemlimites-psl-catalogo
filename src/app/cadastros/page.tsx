@@ -5,7 +5,10 @@ import { useRouter } from "next/navigation";
 import Header from "../../components/Header";
 import { supabase } from "../../lib/supabaseClient";
 import { useAuth } from "../../contexts/AuthContext";
-import { calcularPrecificacaoArma } from "../../lib/precoCustoMargem";
+import {
+  calcularPrecificacaoArma,
+  custoComImpostosSequencial,
+} from "../../lib/precoCustoMargem";
 import {
   armaPassaFiltroCalibre,
   fetchVariacoesMetaPorArmaIds,
@@ -44,6 +47,8 @@ type Arma = {
   destaque_promocao?: boolean | null;
   preco_custo?: number | null;
   margem_venda_percent?: number | null;
+  imposto_simples_percent?: number | null;
+  difal_percent?: number | null;
   marca?: { nome: string } | null;
   calibre?: { nome: string } | null;
   funcionamento?: { nome: string } | null;
@@ -70,6 +75,10 @@ type FormArma = {
   destaque_promocao: boolean;
   preco_custo: string;
   margem_venda_percent: string;
+  /** Só para calcular promo à vista no formulário (não salvo no banco) */
+  margem_promocao_percent: string;
+  imposto_simples_percent: string;
+  difal_percent: string;
 };
 
 type Variacao = {
@@ -107,7 +116,28 @@ const initialForm: FormArma = {
   destaque_promocao: false,
   preco_custo: "",
   margem_venda_percent: "",
+  margem_promocao_percent: "",
+  imposto_simples_percent: "",
+  difal_percent: "",
 };
+
+function formatPctStr(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return "";
+  return Number(n).toLocaleString("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  });
+}
+
+function impostosFormDoCatalogo(tributacao: {
+  pctSimplesStr: string;
+  pctDifalStr: string;
+}): Pick<FormArma, "imposto_simples_percent" | "difal_percent"> {
+  return {
+    imposto_simples_percent: tributacao.pctSimplesStr,
+    difal_percent: tributacao.pctDifalStr,
+  };
+}
 
 const inputClass =
   "w-full rounded-lg border border-zinc-600 bg-zinc-800/50 px-4 py-2.5 text-white placeholder-zinc-500 focus:border-[#E9B20E] focus:outline-none focus:ring-1 focus:ring-[#E9B20E]";
@@ -719,6 +749,14 @@ export default function CadastrosPage() {
               maximumFractionDigits: 4,
             })
           : "",
+      imposto_simples_percent:
+        arma.imposto_simples_percent != null
+          ? formatPctStr(Number(arma.imposto_simples_percent))
+          : tributacao.pctSimplesStr,
+      difal_percent:
+        arma.difal_percent != null
+          ? formatPctStr(Number(arma.difal_percent))
+          : tributacao.pctDifalStr,
     });
     setFotoFiles([]);
     setFotoPreviews([]);
@@ -807,7 +845,7 @@ export default function CadastrosPage() {
 
   const openNewModal = () => {
     setEditingId(null);
-    setForm(initialForm);
+    setForm({ ...initialForm, ...impostosFormDoCatalogo(tributacao) });
     setFotoFiles([]);
     setFotoPreviews([]);
     setFotosExistentes([]);
@@ -851,12 +889,18 @@ export default function CadastrosPage() {
   const custoMargemParaDb = (): {
     preco_custo: number | null;
     margem_venda_percent: number | null;
+    imposto_simples_percent: number | null;
+    difal_percent: number | null;
   } => {
     const custo = parsePreco(form.preco_custo);
     const margem = parsePreco(form.margem_venda_percent);
+    const pctSimples = parsePreco(form.imposto_simples_percent);
+    const pctDifal = parsePreco(form.difal_percent);
     return {
       preco_custo: custo != null && custo >= 0 ? custo : null,
       margem_venda_percent: margem != null && margem >= 0 ? margem : null,
+      imposto_simples_percent: pctSimples != null && pctSimples >= 0 ? pctSimples : null,
+      difal_percent: pctDifal != null && pctDifal >= 0 ? pctDifal : null,
     };
   };
 
@@ -987,6 +1031,23 @@ export default function CadastrosPage() {
             return;
           }
         }
+      }
+
+      const pctImpostoProduto = parsePreco(form.imposto_simples_percent);
+      const pctDifalProduto = parsePreco(form.difal_percent);
+      if (
+        (parsePreco(form.preco_custo) != null || parsePreco(form.margem_venda_percent) != null) &&
+        (pctImpostoProduto == null ||
+          pctImpostoProduto < 0 ||
+          pctDifalProduto == null ||
+          pctDifalProduto < 0)
+      ) {
+        setMessage({
+          type: "error",
+          text: "Informe percentuais válidos (≥ 0) para os impostos deste produto.",
+        });
+        setSubmitLoading(false);
+        return;
       }
 
       const precoValue = form.preco
@@ -1798,13 +1859,32 @@ export default function CadastrosPage() {
 
   const custoParsedModal = parsePreco(form.preco_custo);
   const margemParsedModal = parsePreco(form.margem_venda_percent);
-  const pctSimplesModal = parsePreco(tributacao.pctSimplesStr) ?? 0;
-  const pctDifalModal = parsePreco(tributacao.pctDifalStr) ?? 0;
+  const pctSimplesModal = parsePreco(form.imposto_simples_percent) ?? 0;
+  const pctDifalModal = parsePreco(form.difal_percent) ?? 0;
+  const impostosProdutoValidos =
+    parsePreco(form.imposto_simples_percent) != null &&
+    parsePreco(form.imposto_simples_percent)! >= 0 &&
+    parsePreco(form.difal_percent) != null &&
+    parsePreco(form.difal_percent)! >= 0;
+  const subtotalAposSimplesModal =
+    custoParsedModal != null && custoParsedModal >= 0
+      ? custoParsedModal * (1 + pctSimplesModal / 100)
+      : null;
+  const valorImpostoSimplesModal =
+    custoParsedModal != null && subtotalAposSimplesModal != null
+      ? subtotalAposSimplesModal - custoParsedModal
+      : null;
+  const valorImpostoDifalModal =
+    subtotalAposSimplesModal != null
+      ? custoComImpostosSequencial(custoParsedModal!, pctSimplesModal, pctDifalModal) -
+        subtotalAposSimplesModal
+      : null;
   const precificacaoModal =
     custoParsedModal != null &&
     custoParsedModal >= 0 &&
     margemParsedModal != null &&
-    margemParsedModal >= 0
+    margemParsedModal >= 0 &&
+    impostosProdutoValidos
       ? calcularPrecificacaoArma(
           custoParsedModal,
           pctSimplesModal,
@@ -1812,9 +1892,13 @@ export default function CadastrosPage() {
           margemParsedModal
         )
       : null;
+  const valorLucroModal =
+    precificacaoModal != null
+      ? precificacaoModal.valorBrutoComLucro - precificacaoModal.custoComImpostos
+      : null;
 
   const podeUsarMargemVariacoes =
-    margemParsedModal != null && margemParsedModal >= 0;
+    margemParsedModal != null && margemParsedModal >= 0 && impostosProdutoValidos;
 
   /** Custo numérico para precificação: custo da linha ou custo geral do produto */
   const custoNumericoVariacao = (v: Variacao): number | null => {
@@ -1836,6 +1920,87 @@ export default function CadastrosPage() {
     ).precoSugerido;
   };
 
+  const margemPromoParsed = parsePreco(form.margem_promocao_percent);
+
+  const precoPromoSugeridoDeCusto = (custo: number, margemPromo: number): number =>
+    calcularPrecificacaoArma(custo, pctSimplesModal, pctDifalModal, margemPromo).precoSugerido;
+
+  const precoPromoSugeridoVariacao = (v: Variacao): number | null => {
+    if (margemPromoParsed == null || margemPromoParsed < 0 || !impostosProdutoValidos) return null;
+    const custo = custoNumericoVariacao(v);
+    if (custo == null) return null;
+    return precoPromoSugeridoDeCusto(custo, margemPromoParsed);
+  };
+
+  const precoPromoSugeridoProduto = (): number | null => {
+    if (margemPromoParsed == null || margemPromoParsed < 0 || !impostosProdutoValidos) return null;
+    if (custoParsedModal == null || custoParsedModal < 0) return null;
+    return precoPromoSugeridoDeCusto(custoParsedModal, margemPromoParsed);
+  };
+
+  const aplicarPromoSugeridaProduto = () => {
+    const sug = precoPromoSugeridoProduto();
+    if (sug == null) {
+      setMessage({
+        type: "error",
+        text: "Informe custo, impostos e % de lucro promocional válidos.",
+      });
+      return;
+    }
+    const precoVenda = parsePreco(form.preco);
+    if (precoVenda != null && sug >= precoVenda) {
+      setMessage({
+        type: "error",
+        text: "O preço promocional calculado precisa ser menor que o preço de venda.",
+      });
+      return;
+    }
+    setForm((p) => ({ ...p, preco_promocional: formatPrecoBr(sug) }));
+    setMessage(null);
+  };
+
+  const aplicarPromoSugeridaTodasVariacoes = () => {
+    if (margemPromoParsed == null || margemPromoParsed < 0 || !impostosProdutoValidos) {
+      setMessage({
+        type: "error",
+        text: "Informe % de lucro promocional e impostos válidos.",
+      });
+      return;
+    }
+    let aplicadas = 0;
+    let ignoradas = 0;
+    setVariacoes((prev) =>
+      prev.map((v) => {
+        const sug = precoPromoSugeridoVariacao(v);
+        if (sug == null) {
+          ignoradas++;
+          return v;
+        }
+        const precoVenda = parsePreco(v.preco);
+        if (precoVenda != null && sug >= precoVenda) {
+          ignoradas++;
+          return v;
+        }
+        aplicadas++;
+        return { ...v, preco_promocional: formatPrecoBr(sug) };
+      })
+    );
+    if (aplicadas === 0) {
+      setMessage({
+        type: "error",
+        text: "Nenhuma variação recebeu promo: verifique custo, preço de venda e % de lucro promocional.",
+      });
+      return;
+    }
+    setMessage({
+      type: "ok",
+      text:
+        ignoradas > 0
+          ? `Promo calculada em ${aplicadas} variação(ões); ${ignoradas} ignorada(s) (sem custo ou promo ≥ venda).`
+          : `Promo calculada em ${aplicadas} variação(ões).`,
+    });
+  };
+
   const aplicarCustoGeralEmTodasVariacoes = () => {
     if (variacoes.length === 0) return;
     if (custoParsedModal == null || custoParsedModal < 0) {
@@ -1854,7 +2019,17 @@ export default function CadastrosPage() {
     variacoes.length > 0 && custoParsedModal != null && custoParsedModal >= 0;
 
   const mostrarBlocoPrecificacao =
-    precificacaoModal != null || (comVariacao && podeUsarMargemVariacoes);
+    (custoParsedModal != null && custoParsedModal >= 0 && impostosProdutoValidos) ||
+    precificacaoModal != null ||
+    (comVariacao && podeUsarMargemVariacoes);
+
+  const restaurarImpostosPadraoCatalogo = () => {
+    setForm((prev) => ({
+      ...prev,
+      ...impostosFormDoCatalogo(tributacao),
+    }));
+    setMessage(null);
+  };
 
   const calibresPorIdModal = useMemo(
     () => new Map(calibres.map((c) => [c.id, c.nome])),
@@ -3156,24 +3331,27 @@ export default function CadastrosPage() {
                   </div>
 
                   <div className="rounded-xl border border-zinc-600/80 bg-zinc-800/20 p-6 space-y-4">
-                    <p className="text-sm font-medium text-zinc-200">Custo, impostos e lucro</p>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <p className="text-sm font-medium text-zinc-200">Custo, impostos e lucro</p>
+                      <button
+                        type="button"
+                        onClick={restaurarImpostosPadraoCatalogo}
+                        className="rounded-lg border border-zinc-600 bg-zinc-800/80 px-3 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-700"
+                        title={`Restaurar ${tributacao.nomeSimples} ${tributacao.pctSimplesStr}% e ${tributacao.nomeDifal} ${tributacao.pctDifalStr}% da aba Configurações`}
+                      >
+                        Usar impostos padrão do catálogo
+                      </button>
+                    </div>
                     <p className="text-xs text-zinc-500">
-                      Impostos da aba Configurações: primeiro{" "}
-                      <span className="text-zinc-300">
-                        {tributacao.nomeSimples} ({pctSimplesModal.toLocaleString("pt-BR")}%)
-                      </span>{" "}
-                      sobre o custo; depois{" "}
-                      <span className="text-zinc-300">
-                        {tributacao.nomeDifal} ({pctDifalModal.toLocaleString("pt-BR")}%)
-                      </span>{" "}
-                      sobre esse subtotal. O lucro (%) incide sobre <strong className="text-zinc-300">custo + impostos</strong>
-                      . Para preço sugerido ≥ R$ 100, arredonda para baixo na dezena de reais e ajusta para terminar em
-                      ,90 (ex.: 8.778,21 → 8.769,90); abaixo de R$ 100, piso ao centavo.
+                      Os impostos são aplicados <strong className="text-zinc-300">em sequência</strong> sobre o
+                      custo deste produto. Você pode ajustar os percentuais abaixo sem alterar a configuração
+                      global. O lucro (%) incide sobre <strong className="text-zinc-300">custo + impostos</strong>.
                       {comVariacao && (
                         <>
                           {" "}
                           Com <strong className="text-zinc-300">variações</strong>, cada opção pode ter{" "}
-                          <strong className="text-zinc-300">custo próprio</strong> no cartão abaixo; o % de lucro deste bloco é o mesmo para todas.
+                          <strong className="text-zinc-300">custo próprio</strong> no cartão abaixo; impostos e % de
+                          lucro deste bloco valem para todas.
                         </>
                       )}
                     </p>
@@ -3209,31 +3387,116 @@ export default function CadastrosPage() {
                         />
                       </div>
                     </div>
+                    <div className="grid gap-3 rounded-lg border border-zinc-700/60 bg-zinc-900/30 p-4 sm:grid-cols-2">
+                      <p className="col-span-full text-xs font-medium uppercase tracking-wide text-zinc-500">
+                        Impostos deste produto
+                      </p>
+                      <div>
+                        <label htmlFor="imposto_simples_percent" className={labelClass}>
+                          {tributacao.nomeSimples} (% sobre o custo)
+                        </label>
+                        <input
+                          id="imposto_simples_percent"
+                          name="imposto_simples_percent"
+                          type="text"
+                          inputMode="decimal"
+                          value={form.imposto_simples_percent}
+                          onChange={handleChange}
+                          className={inputClass}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="difal_percent" className={labelClass}>
+                          {tributacao.nomeDifal} (% sobre o subtotal)
+                        </label>
+                        <input
+                          id="difal_percent"
+                          name="difal_percent"
+                          type="text"
+                          inputMode="decimal"
+                          value={form.difal_percent}
+                          onChange={handleChange}
+                          className={inputClass}
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
                     {mostrarBlocoPrecificacao ? (
-                      <div className="space-y-2 rounded-md border border-zinc-600/60 bg-zinc-900/40 px-3 py-3">
+                      <div className="space-y-3 rounded-md border border-zinc-600/60 bg-zinc-900/40 px-3 py-3">
+                        {custoParsedModal != null && custoParsedModal >= 0 && impostosProdutoValidos ? (
+                          <div className="space-y-1.5 border-b border-zinc-700/80 pb-3 text-xs">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                              Composição do preço (custo geral)
+                            </p>
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-zinc-400">
+                              <span>Custo</span>
+                              <span className="font-medium text-zinc-200">
+                                R$ {formatPrecoBr(custoParsedModal)}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-zinc-400">
+                              <span>
+                                + {tributacao.nomeSimples} ({pctSimplesModal.toLocaleString("pt-BR")}%)
+                              </span>
+                              <span className="font-medium text-amber-200/90">
+                                + R$ {formatPrecoBr(valorImpostoSimplesModal ?? 0)}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-zinc-400">
+                              <span>
+                                + {tributacao.nomeDifal} ({pctDifalModal.toLocaleString("pt-BR")}%)
+                              </span>
+                              <span className="font-medium text-amber-200/90">
+                                + R$ {formatPrecoBr(valorImpostoDifalModal ?? 0)}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-zinc-700/60 pt-1.5 text-zinc-300">
+                              <span>= Custo com impostos</span>
+                              <span className="font-semibold text-zinc-100">
+                                R${" "}
+                                {custoComImpostosSequencial(
+                                  custoParsedModal,
+                                  pctSimplesModal,
+                                  pctDifalModal
+                                ).toLocaleString("pt-BR", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </span>
+                            </div>
+                            {precificacaoModal != null ? (
+                              <>
+                                <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-zinc-400">
+                                  <span>
+                                    + Lucro ({margemParsedModal!.toLocaleString("pt-BR")}%)
+                                  </span>
+                                  <span className="font-medium text-emerald-300/90">
+                                    + R$ {formatPrecoBr(valorLucroModal ?? 0)}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-zinc-400">
+                                  <span>Valor bruto (antes do arredondamento)</span>
+                                  <span className="font-medium text-zinc-200">
+                                    R${" "}
+                                    {precificacaoModal.valorBrutoComLucro.toLocaleString("pt-BR", {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
+                                  </span>
+                                </div>
+                              </>
+                            ) : (
+                              <p className="pt-1 text-zinc-500">
+                                Informe o <strong className="text-zinc-300">% de lucro</strong> para ver o valor
+                                final sugerido.
+                              </p>
+                            )}
+                          </div>
+                        ) : null}
                         {precificacaoModal != null ? (
                           <>
-                            <p className="text-xs text-zinc-500">
-                              Custo + impostos (sequencial):{" "}
-                              <span className="font-medium text-zinc-200">
-                                R${" "}
-                                {precificacaoModal.custoComImpostos.toLocaleString("pt-BR", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </span>
-                            </p>
-                            <p className="text-xs text-zinc-500">
-                              Com lucro (valor bruto):{" "}
-                              <span className="font-medium text-zinc-200">
-                                R${" "}
-                                {precificacaoModal.valorBrutoComLucro.toLocaleString("pt-BR", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </span>
-                            </p>
-                            <div className="flex flex-col gap-2 border-t border-zinc-700/80 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                               <p className="text-sm text-zinc-300">
                                 Preço sugerido (arred., custo geral):{" "}
                                 <span className="font-semibold text-[#E9B20E]">
@@ -3266,9 +3529,19 @@ export default function CadastrosPage() {
                               ) : null}
                             </div>
                           </>
+                        ) : custoParsedModal == null || custoParsedModal < 0 ? (
+                          <p className="text-xs text-zinc-500">
+                            Informe o <strong className="text-zinc-300">custo geral</strong> para ver a composição
+                            com impostos. Cada variação pode ter custo próprio nos cartões abaixo.
+                          </p>
+                        ) : !impostosProdutoValidos ? (
+                          <p className="text-xs text-red-400/90">
+                            Informe percentuais válidos (≥ 0) para os impostos deste produto.
+                          </p>
                         ) : (
                           <p className="text-xs text-zinc-500">
-                            Informe o <strong className="text-zinc-300">% de lucro</strong> acima. Para ver o resumo com números (custo geral), preencha também o custo geral. Cada variação pode ter custo próprio nos cartões abaixo; na falta de custo na variação, usa-se o custo geral.
+                            Informe o <strong className="text-zinc-300">% de lucro</strong> para calcular o preço
+                            sugerido. Cada variação pode ter custo próprio nos cartões abaixo.
                           </p>
                         )}
                         {comVariacao && variacoes.length > 0 ? (
@@ -3366,34 +3639,83 @@ export default function CadastrosPage() {
                     </div>
                     {form.em_promocao && (
                       <>
-                        <div>
-                          <label htmlFor="preco_promocional" className={labelClass}>
-                            Preço promocional do produto (R$)
-                          </label>
-                          {comVariacao && variacoes.length > 0 ? (
-                            <p className="mb-2 text-xs text-zinc-500">
-                              Usado na listagem quando não houver promo por variação. Se houver valores nas
-                              variações abaixo, salva o <strong className="text-zinc-400">menor</strong> entre elas.
+                        <div className="rounded-lg border border-rose-900/40 bg-rose-950/20 p-4 space-y-4">
+                          <div>
+                            <p className="text-sm font-medium text-zinc-200">Promoção à vista</p>
+                            <p className="mt-1 text-xs text-zinc-500">
+                              Calcula sobre custo + impostos deste produto. O valor pode ser ajustado manualmente
+                              depois. Válido somente para pagamento à vista.
                             </p>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div>
+                              <label htmlFor="margem_promocao_percent" className={labelClass}>
+                                % de lucro promocional (à vista)
+                              </label>
+                              <input
+                                id="margem_promocao_percent"
+                                name="margem_promocao_percent"
+                                type="text"
+                                inputMode="decimal"
+                                value={form.margem_promocao_percent}
+                                onChange={handleChange}
+                                className={inputClass}
+                                placeholder="ex.: 5"
+                              />
+                            </div>
+                            <div>
+                              <label htmlFor="preco_promocional" className={labelClass}>
+                                Preço promocional à vista (R$)
+                              </label>
+                              <div className="flex gap-2">
+                                <input
+                                  id="preco_promocional"
+                                  name="preco_promocional"
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={form.preco_promocional}
+                                  onChange={handleChange}
+                                  className={inputClass}
+                                  placeholder="0,00"
+                                />
+                                {!comVariacao ? (
+                                  <button
+                                    type="button"
+                                    onClick={aplicarPromoSugeridaProduto}
+                                    disabled={precoPromoSugeridoProduto() == null}
+                                    className="shrink-0 rounded-lg px-3 py-2 text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+                                    title="Usa custo + impostos + % de lucro promocional"
+                                  >
+                                    Calcular
+                                  </button>
+                                ) : null}
+                              </div>
+                              {comVariacao && variacoes.length > 0 ? (
+                                <p className="mt-1 text-xs text-zinc-500">
+                                  Na listagem, usa o menor valor entre as variações abaixo.
+                                </p>
+                              ) : null}
+                            </div>
+                          </div>
+                          {comVariacao && variacoes.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={aplicarPromoSugeridaTodasVariacoes}
+                              disabled={margemPromoParsed == null || margemPromoParsed < 0}
+                              className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Calcular promo em todas as variações
+                            </button>
                           ) : null}
-                          <input
-                            id="preco_promocional"
-                            name="preco_promocional"
-                            type="text"
-                            value={form.preco_promocional}
-                            onChange={handleChange}
-                            className={inputClass}
-                            placeholder="0,00"
-                          />
                         </div>
                         {comVariacao && resumoPromoVariacoes.length > 0 ? (
                           <div className="overflow-x-auto rounded-lg border border-zinc-700/60">
-                            <table className="w-full min-w-[320px] text-left text-sm">
+                            <table className="w-full min-w-[420px] text-left text-sm">
                               <thead className="border-b border-zinc-700/80 bg-zinc-950/50 text-xs uppercase tracking-wide text-zinc-500">
                                 <tr>
                                   <th className="px-3 py-2 font-medium">Variação</th>
                                   <th className="px-3 py-2 font-medium">Venda</th>
-                                  <th className="px-3 py-2 font-medium">Promo</th>
+                                  <th className="px-3 py-2 font-medium">Promo à vista (R$)</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-zinc-800/80">
@@ -3405,10 +3727,17 @@ export default function CadastrosPage() {
                                         ? `R$ ${formatPrecoBr(row.precoVenda)}`
                                         : "—"}
                                     </td>
-                                    <td className="px-3 py-2 tabular-nums text-rose-300/90">
-                                      {row.precoPromo != null
-                                        ? `R$ ${formatPrecoBr(row.precoPromo)}`
-                                        : "—"}
+                                    <td className="px-3 py-2">
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={variacoes[row.idx]?.preco_promocional ?? ""}
+                                        onChange={(e) =>
+                                          updateVariacao(row.idx, "preco_promocional", e.target.value)
+                                        }
+                                        className={`${inputClass} min-w-[7rem] py-1.5 text-sm`}
+                                        placeholder="0,00"
+                                      />
                                     </td>
                                   </tr>
                                 ))}
@@ -3417,7 +3746,11 @@ export default function CadastrosPage() {
                           </div>
                         ) : null}
                         <fieldset className="space-y-2">
-                          <legend className={`${labelClass} mb-2`}>Condição da promoção</legend>
+                          <legend className={`${labelClass} mb-2`}>Texto na vitrine</legend>
+                          <p className="mb-2 text-xs text-zinc-500">
+                            Define o que aparece junto ao preço promocional. O parcelamento na loja usa sempre o preço
+                            normal.
+                          </p>
                           <div className="flex flex-wrap gap-4">
                             <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
                               <input
@@ -3428,7 +3761,7 @@ export default function CadastrosPage() {
                                 onChange={handleChange}
                                 className="h-4 w-4 border-zinc-600 text-[#E9B20E] focus:ring-[#E9B20E]"
                               />
-                              À vista
+                              Promoção à vista
                             </label>
                             <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
                               <input
@@ -3439,7 +3772,7 @@ export default function CadastrosPage() {
                                 onChange={handleChange}
                                 className="h-4 w-4 border-zinc-600 text-[#E9B20E] focus:ring-[#E9B20E]"
                               />
-                              Parcela em até X vezes
+                              Anunciar parcelamento (até X vezes)
                             </label>
                           </div>
                         </fieldset>
@@ -3614,6 +3947,28 @@ export default function CadastrosPage() {
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={precoPromoSugeridoVariacao(v) == null}
+                            title="Usa o custo desta variação (ou geral) + impostos + % de lucro promocional"
+                            className="rounded-lg border border-rose-800/60 bg-rose-950/40 px-3 py-1.5 text-xs font-medium text-rose-200 hover:bg-rose-900/50 disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => {
+                              const sug = precoPromoSugeridoVariacao(v);
+                              if (sug == null) return;
+                              const precoVenda = parsePreco(v.preco);
+                              if (precoVenda != null && sug >= precoVenda) {
+                                setMessage({
+                                  type: "error",
+                                  text: `Variação ${idx + 1}: promo calculada não ficou menor que o preço de venda.`,
+                                });
+                                return;
+                              }
+                              updateVariacao(idx, "preco_promocional", formatPrecoBr(sug));
+                              setMessage(null);
+                            }}
+                          >
+                            Calcular promo
+                          </button>
                           <button
                             type="button"
                             disabled={precoSugeridoParaVariacao(v) == null}

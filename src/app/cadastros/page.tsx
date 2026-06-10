@@ -749,6 +749,7 @@ export default function CadastrosPage() {
               maximumFractionDigits: 4,
             })
           : "",
+      margem_promocao_percent: "",
       imposto_simples_percent:
         arma.imposto_simples_percent != null
           ? formatPctStr(Number(arma.imposto_simples_percent))

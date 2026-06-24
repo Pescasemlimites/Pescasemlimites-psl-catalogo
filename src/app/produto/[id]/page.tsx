@@ -438,11 +438,15 @@ export default function ProdutoPage() {
         foto_url: fotoAtual?.foto_url || produto.foto_url,
         marca: produto.marca,
         calibre: calibreAtual,
+        funcionamento: produto.funcionamento,
+        categoria: produto.categoria,
         espec_capacidade_tiros: produto.espec_capacidade_tiros,
+        espec_carregadores: produto.espec_carregadores,
+        espec_comprimento_cano: comprimentoCanoAtual,
+        caracteristica_acabamento: acabamentoAtual,
         preco_original: precoAtual,
         preco_promocional: precoPromocional,
         promocao_ativa: promocaoAtiva,
-        condicao_promocao: textoCondicaoPromocao(produto.promocao_modo, produto.promocao_parcelas_max),
       });
     } catch (error) {
       console.error("Erro ao gerar Story Instagram:", error);

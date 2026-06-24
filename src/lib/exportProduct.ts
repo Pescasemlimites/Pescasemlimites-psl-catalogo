@@ -29,17 +29,27 @@ const IMAGE_EXPORT_ACCENT = '#ffcc00';
 
 const INSTAGRAM_STORY_WIDTH = 1080;
 const INSTAGRAM_STORY_HEIGHT = 1920;
+const INSTAGRAM_STORY_BG = '/story/fundo_story.png';
+const INSTAGRAM_STORY_PHOTO_SIZE = 820;
+const INSTAGRAM_STORY_PRECO_TOP = 1190;
+const INSTAGRAM_STORY_PRECO_HEIGHT = 80;
+const STORY_TITLE_FONT_FAMILY = "'Oswald', sans-serif";
+const STORY_TITLE_FONT_LINK_ID = 'google-font-oswald-story';
 
 export type InstagramStoryData = {
   nome: string;
   foto_url: string | null;
   marca?: { nome: string } | null;
   calibre?: { nome: string } | null;
+  funcionamento?: { nome: string } | null;
+  categoria?: { nome: string } | null;
   espec_capacidade_tiros?: string | null;
+  espec_carregadores?: string | null;
+  espec_comprimento_cano?: string | null;
+  caracteristica_acabamento?: string | null;
   preco_original?: number | null;
   preco_promocional?: number | null;
   promocao_ativa?: boolean;
-  condicao_promocao?: string;
 };
 
 function getProdutoEspecsItems(produto: ProdutoData) {
@@ -173,7 +183,7 @@ function buildProductImageExportDom(produto: ProdutoData, logoUrl: string): HTML
     precoDiv.appendChild(precoLabel);
     const precoValor = document.createElement('div');
     precoValor.textContent = `R$ ${formatPrice(produto.preco)}`;
-    precoValor.style.fontSize = '42px';
+    precoValor.style.fontSize = '55px';
     precoValor.style.fontWeight = 'bold';
     precoValor.style.color = IMAGE_EXPORT_ACCENT;
     precoDiv.appendChild(precoValor);
@@ -236,203 +246,198 @@ function buildProductImageExportDom(produto: ProdutoData, logoUrl: string): HTML
   return container;
 }
 
-function buildInstagramStoryExportDom(data: InstagramStoryData, logoUrl: string): HTMLDivElement {
+function getInstagramStorySpecsItems(data: InstagramStoryData) {
+  return [
+    data.marca && { label: 'Marca', value: data.marca.nome },
+    data.calibre && { label: 'Calibre', value: data.calibre.nome },
+    data.funcionamento && { label: 'Funcionamento', value: data.funcionamento.nome },
+    data.espec_capacidade_tiros && { label: 'Capacidade de Tiros', value: data.espec_capacidade_tiros },
+    data.espec_carregadores && { label: 'Carregadores', value: data.espec_carregadores },
+    data.espec_comprimento_cano && { label: 'Comprimento do Cano', value: data.espec_comprimento_cano },
+    data.caracteristica_acabamento && { label: 'Acabamento', value: data.caracteristica_acabamento },
+    data.categoria && { label: 'Categoria', value: data.categoria.nome },
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
+}
+
+function buildInstagramStoryExportDom(data: InstagramStoryData): HTMLDivElement {
   const container = document.createElement('div');
+  container.style.position = 'relative';
   container.style.width = `${INSTAGRAM_STORY_WIDTH}px`;
   container.style.height = `${INSTAGRAM_STORY_HEIGHT}px`;
-  container.style.padding = '48px 40px 56px';
-  container.style.backgroundColor = IMAGE_EXPORT_BG;
-  container.style.color = '#ffffff';
-  container.style.fontFamily = 'Arial, Helvetica, sans-serif';
-  container.style.boxSizing = 'border-box';
-  container.style.display = 'flex';
-  container.style.flexDirection = 'column';
-  container.style.alignItems = 'center';
   container.style.overflow = 'hidden';
+  container.style.fontFamily = 'Arial, Helvetica, sans-serif';
 
-  const logoWrap = document.createElement('div');
-  logoWrap.style.display = 'flex';
-  logoWrap.style.justifyContent = 'center';
-  logoWrap.style.flexShrink = '0';
-  logoWrap.style.marginBottom = '24px';
-  const logoImg = document.createElement('img');
-  logoImg.src = logoUrl;
-  logoImg.style.height = '64px';
-  logoImg.style.objectFit = 'contain';
-  logoImg.style.maxWidth = '480px';
-  logoWrap.appendChild(logoImg);
-  container.appendChild(logoWrap);
+  const bgImg = document.createElement('img');
+  bgImg.src = INSTAGRAM_STORY_BG;
+  bgImg.style.position = 'absolute';
+  bgImg.style.top = '0';
+  bgImg.style.left = '0';
+  bgImg.style.width = `${INSTAGRAM_STORY_WIDTH}px`;
+  bgImg.style.height = `${INSTAGRAM_STORY_HEIGHT}px`;
+  bgImg.style.objectFit = 'cover';
+  container.appendChild(bgImg);
 
-  if (data.promocao_ativa) {
-    const badge = document.createElement('div');
-    badge.textContent = 'PROMOÇÃO';
-    badge.style.flexShrink = '0';
-    badge.style.marginBottom = '20px';
-    badge.style.padding = '10px 32px';
-    badge.style.borderRadius = '999px';
-    badge.style.backgroundColor = IMAGE_EXPORT_ACCENT;
-    badge.style.color = '#0a0a0f';
-    badge.style.fontSize = '28px';
-    badge.style.fontWeight = 'bold';
-    badge.style.letterSpacing = '0.08em';
-    container.appendChild(badge);
-  }
-
-  const imageWrap = document.createElement('div');
-  imageWrap.style.flex = '1';
-  imageWrap.style.display = 'flex';
-  imageWrap.style.alignItems = 'center';
-  imageWrap.style.justifyContent = 'center';
-  imageWrap.style.width = '100%';
-  imageWrap.style.minHeight = '0';
-  imageWrap.style.marginBottom = '28px';
+  const photoTop = 185;
+  const photoLeft = (INSTAGRAM_STORY_WIDTH - INSTAGRAM_STORY_PHOTO_SIZE) / 2;
+  const nomeTop = photoTop + INSTAGRAM_STORY_PHOTO_SIZE + 8;
 
   if (data.foto_url) {
+    const fotoWrap = document.createElement('div');
+    fotoWrap.style.position = 'absolute';
+    fotoWrap.style.top = `${photoTop}px`;
+    fotoWrap.style.left = `${photoLeft}px`;
+    fotoWrap.style.width = `${INSTAGRAM_STORY_PHOTO_SIZE}px`;
+    fotoWrap.style.height = `${INSTAGRAM_STORY_PHOTO_SIZE}px`;
+    fotoWrap.style.display = 'flex';
+    fotoWrap.style.alignItems = 'center';
+    fotoWrap.style.justifyContent = 'center';
+    fotoWrap.style.overflow = 'hidden';
+    fotoWrap.style.borderRadius = '30px';
+
     const fotoImg = document.createElement('img');
     fotoImg.src = data.foto_url;
-    fotoImg.style.maxWidth = '100%';
-    fotoImg.style.maxHeight = '900px';
+    fotoImg.crossOrigin = 'anonymous';
+    fotoImg.style.width = '100%';
+    fotoImg.style.height = '100%';
     fotoImg.style.objectFit = 'contain';
-    imageWrap.appendChild(fotoImg);
+    fotoWrap.appendChild(fotoImg);
+    container.appendChild(fotoWrap);
   }
 
-  container.appendChild(imageWrap);
+  const nomeModelo = document.createElement('div');
+  nomeModelo.textContent = (data.nome || 'Produto').toUpperCase();
+  nomeModelo.style.position = 'absolute';
+  nomeModelo.style.top = `${nomeTop}px`;
+  nomeModelo.style.left = '60px';
+  nomeModelo.style.right = '60px';
+  nomeModelo.style.textAlign = 'center';
+  nomeModelo.style.fontSize = '60px';
+  nomeModelo.style.fontFamily = STORY_TITLE_FONT_FAMILY;
+  nomeModelo.style.fontWeight = '700';
+  nomeModelo.style.color = IMAGE_EXPORT_ACCENT;
+  nomeModelo.style.lineHeight = '1.2';
+  container.appendChild(nomeModelo);
 
-  const title = document.createElement('h1');
-  title.textContent = (data.nome || 'Produto').toUpperCase();
-  title.style.margin = '0 0 20px';
-  title.style.fontSize = '40px';
-  title.style.fontWeight = '600';
-  title.style.color = IMAGE_EXPORT_ACCENT;
-  title.style.lineHeight = '1.2';
-  title.style.letterSpacing = '0.03em';
-  title.style.textAlign = 'center';
-  title.style.flexShrink = '0';
-  container.appendChild(title);
+  const specsWrap = document.createElement('div');
+  specsWrap.style.position = 'absolute';
+  specsWrap.style.top = `1425px`;
+  specsWrap.style.left = '72px';
+  specsWrap.style.right = '72px';
 
-  const precoWrap = document.createElement('div');
-  precoWrap.style.flexShrink = '0';
-  precoWrap.style.marginBottom = '32px';
-  precoWrap.style.textAlign = 'center';
+  const specsTitle = document.createElement('div');
+  specsTitle.textContent = 'Especificações';
+  specsTitle.style.fontSize = '36px';
+  specsTitle.style.fontWeight = 'bold';
+  specsTitle.style.color = '#ffffff';
+  specsTitle.style.marginBottom = '20px';
+  specsWrap.appendChild(specsTitle);
 
-  const emPromo =
-    data.promocao_ativa &&
-    data.preco_promocional != null &&
-    data.preco_original != null;
+  const specsGrid = document.createElement('div');
+  specsGrid.style.display = 'grid';
+  specsGrid.style.gridTemplateColumns = '1fr 1fr';
+  specsGrid.style.gap = '12px 40px';
 
-  if (emPromo) {
-    const precoOriginal = document.createElement('div');
-    precoOriginal.textContent = `R$ ${formatPrice(data.preco_original ?? null)}`;
-    precoOriginal.style.fontSize = '32px';
-    precoOriginal.style.color = '#888890';
-    precoOriginal.style.textDecoration = 'line-through';
-    precoOriginal.style.marginBottom = '8px';
-    precoWrap.appendChild(precoOriginal);
-
-    const precoPromo = document.createElement('div');
-    precoPromo.textContent = `R$ ${formatPrice(data.preco_promocional ?? null)}`;
-    precoPromo.style.fontSize = '56px';
-    precoPromo.style.fontWeight = 'bold';
-    precoPromo.style.color = IMAGE_EXPORT_ACCENT;
-    precoWrap.appendChild(precoPromo);
-  } else {
-    const preco = data.preco_promocional ?? data.preco_original;
-    if (preco != null) {
-      const precoLabel = document.createElement('div');
-      precoLabel.textContent = 'Valor à vista';
-      precoLabel.style.fontSize = '22px';
-      precoLabel.style.color = '#a0a0a8';
-      precoLabel.style.marginBottom = '8px';
-      precoWrap.appendChild(precoLabel);
-
-      const precoValor = document.createElement('div');
-      precoValor.textContent = `R$ ${formatPrice(preco)}`;
-      precoValor.style.fontSize = '56px';
-      precoValor.style.fontWeight = 'bold';
-      precoValor.style.color = IMAGE_EXPORT_ACCENT;
-      precoWrap.appendChild(precoValor);
-    }
-  }
-
-  container.appendChild(precoWrap);
-
-  const specsContainer = document.createElement('div');
-  specsContainer.style.flexShrink = '0';
-  specsContainer.style.alignSelf = 'stretch';
-  specsContainer.style.width = '100%';
-  specsContainer.style.boxSizing = 'border-box';
-  specsContainer.style.border = `2px solid ${IMAGE_EXPORT_ACCENT}`;
-  specsContainer.style.borderRadius = '16px';
-  specsContainer.style.padding = '20px 24px';
-  specsContainer.style.backgroundColor = 'rgba(12, 12, 18, 0.92)';
-  specsContainer.style.display = 'grid';
-  specsContainer.style.gridTemplateColumns = '1fr 1fr 1fr';
-  specsContainer.style.gap = '16px';
-  specsContainer.style.marginBottom = '24px';
-
-  const specs = [
-    data.marca?.nome && { label: 'Marca', value: data.marca.nome },
-    data.calibre?.nome && { label: 'Calibre', value: data.calibre.nome },
-    data.espec_capacidade_tiros && { label: 'Tiros', value: data.espec_capacidade_tiros },
-  ].filter(Boolean) as Array<{ label: string; value: string }>;
-
-  specs.forEach((spec) => {
+  getInstagramStorySpecsItems(data).forEach((spec) => {
     const specItem = document.createElement('div');
     specItem.style.display = 'flex';
     specItem.style.flexDirection = 'column';
-    specItem.style.alignItems = 'center';
-    specItem.style.gap = '8px';
-    specItem.style.textAlign = 'center';
+    specItem.style.gap = '4px';
 
     const specLabel = document.createElement('span');
     specLabel.textContent = spec.label;
-    specLabel.style.color = '#b8b8c0';
-    specLabel.style.fontSize = '20px';
+    specLabel.style.color = '#a1a1aa';
+    specLabel.style.fontSize = '22px';
 
     const specValue = document.createElement('span');
     specValue.textContent = spec.value;
     specValue.style.color = '#ffffff';
-    specValue.style.fontSize = '24px';
+    specValue.style.fontSize = '32px';
     specValue.style.fontWeight = 'bold';
     specValue.style.lineHeight = '1.3';
 
     specItem.appendChild(specLabel);
     specItem.appendChild(specValue);
-    specsContainer.appendChild(specItem);
+    specsGrid.appendChild(specItem);
   });
 
-  container.appendChild(specsContainer);
+  specsWrap.appendChild(specsGrid);
+  container.appendChild(specsWrap);
 
-  const footer = document.createElement('div');
-  footer.style.flexShrink = '0';
-  footer.style.textAlign = 'center';
-  footer.style.marginTop = 'auto';
+  const precoAvista =
+    data.promocao_ativa && data.preco_promocional != null
+      ? data.preco_promocional
+      : (data.preco_promocional ?? data.preco_original);
 
-  if (data.condicao_promocao) {
-    const condicao = document.createElement('div');
-    condicao.textContent = data.condicao_promocao;
-    condicao.style.fontSize = '22px';
-    condicao.style.fontWeight = '600';
-    condicao.style.color = '#e4e4ec';
-    condicao.style.marginBottom = '12px';
-    footer.appendChild(condicao);
+  if (precoAvista != null) {
+    const precoValor = document.createElement('div');
+    precoValor.textContent = `R$ ${formatPrice(precoAvista)}`;
+    precoValor.style.position = 'absolute';
+    precoValor.style.top = `${INSTAGRAM_STORY_PRECO_TOP}px`;
+    precoValor.style.left = '50%';
+    precoValor.style.transform = 'translateX(-50%)';
+    precoValor.style.width = '720px';
+    precoValor.style.height = `${INSTAGRAM_STORY_PRECO_HEIGHT}px`;
+    precoValor.style.display = 'flex';
+    precoValor.style.alignItems = 'center';
+    precoValor.style.justifyContent = 'center';
+    precoValor.style.textAlign = 'center';
+    precoValor.style.fontSize = '70px';
+    precoValor.style.fontFamily = STORY_TITLE_FONT_FAMILY;
+    precoValor.style.fontWeight = '700';
+    precoValor.style.color = '#000000';
+    precoValor.style.lineHeight = '1.1';
+    precoValor.style.zIndex = '10';
+    container.appendChild(precoValor);
   }
 
-  const loja = document.createElement('div');
-  loja.textContent = 'Pesca Sem Limites';
-  loja.style.fontSize = '20px';
-  loja.style.color = '#888890';
-  footer.appendChild(loja);
-
-  container.appendChild(footer);
-
   return container;
+}
+
+async function ensureStoryTitleFontLoaded(): Promise<void> {
+  if (!document.getElementById(STORY_TITLE_FONT_LINK_ID)) {
+    const link = document.createElement('link');
+    link.id = STORY_TITLE_FONT_LINK_ID;
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=Oswald:wght@700&display=swap';
+    document.head.appendChild(link);
+    await new Promise<void>((resolve) => {
+      link.onload = () => resolve();
+      link.onerror = () => resolve();
+    });
+  }
+
+  try {
+    await document.fonts.load(`700 50px ${STORY_TITLE_FONT_FAMILY}`);
+    await document.fonts.load(`700 70px ${STORY_TITLE_FONT_FAMILY}`);
+    await document.fonts.ready;
+  } catch {
+    // usa fallback sans-serif se a fonte não carregar
+  }
+}
+
+function waitForImage(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error(`Falha ao carregar imagem: ${src}`));
+    img.src = src;
+  });
+}
+
+async function waitForContainerImages(container: HTMLElement): Promise<void> {
+  const images = Array.from(container.querySelectorAll('img'));
+  const srcs = images
+    .map((img) => img.src)
+    .filter((src) => src && !src.startsWith('data:'));
+
+  await Promise.all(srcs.map((src) => waitForImage(src).catch(() => undefined)));
 }
 
 async function renderDomToJpeg(
   container: HTMLDivElement,
   width: number,
-  height: number
+  height: number,
+  options?: { backgroundColor?: string | null }
 ): Promise<HTMLCanvasElement> {
   container.style.position = 'absolute';
   container.style.left = '-9999px';
@@ -440,10 +445,11 @@ async function renderDomToJpeg(
 
   document.body.appendChild(container);
 
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await waitForContainerImages(container);
+  await new Promise((resolve) => setTimeout(resolve, 300));
 
   const canvas = await html2canvas(container, {
-    backgroundColor: IMAGE_EXPORT_BG,
+    backgroundColor: options?.backgroundColor ?? IMAGE_EXPORT_BG,
     width,
     height,
     scale: 1,
@@ -672,12 +678,12 @@ export async function exportProductToImage(
   );
 }
 
-export async function exportProductToInstagramStory(
-  data: InstagramStoryData,
-  logoUrl: string = '/logo.png'
-): Promise<void> {
-  const container = buildInstagramStoryExportDom(data, logoUrl);
-  const canvas = await renderDomToJpeg(container, INSTAGRAM_STORY_WIDTH, INSTAGRAM_STORY_HEIGHT);
+export async function exportProductToInstagramStory(data: InstagramStoryData): Promise<void> {
+  await ensureStoryTitleFontLoaded();
+  const container = buildInstagramStoryExportDom(data);
+  const canvas = await renderDomToJpeg(container, INSTAGRAM_STORY_WIDTH, INSTAGRAM_STORY_HEIGHT, {
+    backgroundColor: null,
+  });
   downloadCanvasAsJpeg(
     canvas,
     `${data.nome?.replace(/[^a-z0-9]/gi, '_') || 'produto'}_story.jpg`

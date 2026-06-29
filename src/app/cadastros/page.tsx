@@ -95,7 +95,14 @@ type Variacao = {
   fotoPreviews?: string[];
   fotosExistentes?: FotoArma[];
   fotosParaRemover?: string[];
+  /** URLs de fotos já salvas a replicar ao criar esta variação (ex.: duplicar variação) */
+  fotosUrlsParaCopiar?: { foto_url: string; ordem: number }[];
 };
+
+type DuplicatePrompt =
+  | { kind: "arma"; armaId: string }
+  | { kind: "variacao"; index: number }
+  | null;
 
 const initialForm: FormArma = {
   categoria_id: "",
@@ -198,6 +205,8 @@ export default function CadastrosPage() {
   const [fotosParaRemover, setFotosParaRemover] = useState<string[]>([]);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePrompt>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [filtroMarca, setFiltroMarca] = useState<string>("");
   const [filtroCalibre, setFiltroCalibre] = useState<string>("");
   const [filtroNome, setFiltroNome] = useState<string>("");
@@ -653,6 +662,155 @@ export default function CadastrosPage() {
     setVariacoes((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const executeDuplicateVariacao = (index: number, includePhotos: boolean) => {
+    const src = variacoes[index];
+    const existentesOrdenadas = [...(src.fotosExistentes || [])].sort(
+      (a, b) => a.ordem - b.ordem
+    );
+    const previewsDeArquivos = (src.fotoPreviews || []).filter(
+      (url) => !existentesOrdenadas.some((f) => f.foto_url === url)
+    );
+
+    const copy: Variacao = {
+      calibre_id: src.calibre_id,
+      comprimento_cano: src.comprimento_cano,
+      preco_custo: src.preco_custo,
+      preco: src.preco,
+      preco_promocional: src.preco_promocional,
+      caracteristica_acabamento: src.caracteristica_acabamento,
+      fotoFiles: includePhotos ? [...(src.fotoFiles || [])] : [],
+      fotoPreviews: includePhotos
+        ? [
+            ...existentesOrdenadas.map((f) => f.foto_url),
+            ...previewsDeArquivos,
+          ]
+        : [],
+      fotosExistentes: [],
+      fotosParaRemover: [],
+      fotosUrlsParaCopiar: includePhotos
+        ? existentesOrdenadas.map((f) => ({ foto_url: f.foto_url, ordem: f.ordem }))
+        : undefined,
+    };
+
+    setVariacoes((prev) => {
+      const next = [...prev];
+      next.splice(index + 1, 0, copy);
+      return next;
+    });
+    setMessage({ type: "ok", text: "Variação duplicada. Salve o produto para confirmar." });
+  };
+
+  const executeDuplicateArma = async (armaId: string, includePhotos: boolean) => {
+    setDuplicatingId(armaId);
+    setMessage(null);
+    try {
+      const { data: original, error } = await supabase
+        .from("armas")
+        .select("*")
+        .eq("id", armaId)
+        .single();
+      if (error || !original) throw error || new Error("Produto não encontrado");
+
+      const nomeBase = (original.nome as string | null)?.trim() || "Produto";
+      const nomeCopia = `${nomeBase} (cópia)`;
+
+      const { data: novo, error: insErr } = await supabase
+        .from("armas")
+        .insert({
+          categoria_id: original.categoria_id,
+          nome: nomeCopia,
+          preco: original.preco,
+          funcionamento_id: original.funcionamento_id,
+          espec_capacidade_tiros: original.espec_capacidade_tiros,
+          espec_carregadores: original.espec_carregadores,
+          marca_id: original.marca_id,
+          calibres_id: original.calibres_id,
+          espec_comprimento_cano: original.espec_comprimento_cano,
+          caracteristica_acabamento: original.caracteristica_acabamento,
+          em_destaque: false,
+          em_promocao: original.em_promocao,
+          preco_promocional: original.preco_promocional,
+          promocao_modo: original.promocao_modo,
+          promocao_parcelas_max: original.promocao_parcelas_max,
+          destaque_promocao: false,
+          preco_custo: original.preco_custo,
+          margem_venda_percent: original.margem_venda_percent,
+          imposto_simples_percent: original.imposto_simples_percent,
+          difal_percent: original.difal_percent,
+        })
+        .select("id")
+        .single();
+      if (insErr || !novo) throw insErr || new Error("Erro ao duplicar produto");
+
+      const novoId = novo.id as string;
+
+      const [{ data: vars }, { data: fotos }] = await Promise.all([
+        supabase.from("variacoes_armas").select("*").eq("arma_id", armaId),
+        includePhotos
+          ? supabase.from("fotos_armas").select("*").eq("arma_id", armaId)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      const mapVariacaoId = new Map<string, string>();
+
+      for (const v of vars || []) {
+        const { data: nv, error: varErr } = await supabase
+          .from("variacoes_armas")
+          .insert({
+            arma_id: novoId,
+            calibre_id: v.calibre_id,
+            comprimento_cano: v.comprimento_cano,
+            preco: v.preco,
+            preco_custo: v.preco_custo,
+            preco_promocional: v.preco_promocional,
+            caracteristica_acabamento: v.caracteristica_acabamento,
+          })
+          .select("id")
+          .single();
+        if (varErr || !nv) throw varErr || new Error("Erro ao duplicar variação");
+        mapVariacaoId.set(v.id, nv.id);
+      }
+
+      if (includePhotos && fotos?.length) {
+        const fotosInsert = fotos.map((f: { variacao_id: string | null; foto_url: string; ordem: number }) => ({
+          arma_id: novoId,
+          variacao_id: f.variacao_id ? mapVariacaoId.get(f.variacao_id) ?? null : null,
+          foto_url: f.foto_url,
+          ordem: f.ordem,
+        }));
+        const { error: fotosErr } = await supabase.from("fotos_armas").insert(fotosInsert);
+        if (fotosErr) throw fotosErr;
+      }
+
+      setMessage({
+        type: "ok",
+        text: includePhotos
+          ? "Produto duplicado com fotos."
+          : "Produto duplicado sem fotos.",
+      });
+      await fetchArmas();
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === "object" && "message" in err
+          ? String((err as { message: string }).message)
+          : "Erro ao duplicar produto.";
+      setMessage({ type: "error", text: msg });
+    } finally {
+      setDuplicatingId(null);
+    }
+  };
+
+  const confirmDuplicate = (includePhotos: boolean) => {
+    if (!duplicatePrompt) return;
+    const prompt = duplicatePrompt;
+    setDuplicatePrompt(null);
+    if (prompt.kind === "arma") {
+      void executeDuplicateArma(prompt.armaId, includePhotos);
+    } else {
+      executeDuplicateVariacao(prompt.index, includePhotos);
+    }
+  };
+
   const updateVariacao = (index: number, field: keyof Variacao, value: string | string[] | File[] | FotoArma[]) => {
     setVariacoes((prev) => {
       const next = [...prev];
@@ -687,9 +845,24 @@ export default function CadastrosPage() {
       const cur = { ...next[variacaoIndex] };
       const files = cur.fotoFiles || [];
       const previews = cur.fotoPreviews || [];
-      if (previews[fotoIndex]) URL.revokeObjectURL(previews[fotoIndex]);
-      cur.fotoFiles = files.filter((_, i) => i !== fotoIndex);
+      const removedUrl = previews[fotoIndex];
+      if (removedUrl?.startsWith("blob:")) URL.revokeObjectURL(removedUrl);
+
+      if (removedUrl?.startsWith("blob:")) {
+        const blobIndicesBefore = previews
+          .slice(0, fotoIndex)
+          .filter((p) => p.startsWith("blob:")).length;
+        cur.fotoFiles = files.filter((_, i) => i !== blobIndicesBefore);
+      }
+
       cur.fotoPreviews = previews.filter((_, i) => i !== fotoIndex);
+
+      if (cur.fotosUrlsParaCopiar && removedUrl && !removedUrl.startsWith("blob:")) {
+        cur.fotosUrlsParaCopiar = cur.fotosUrlsParaCopiar.filter(
+          (f) => f.foto_url !== removedUrl
+        );
+      }
+
       next[variacaoIndex] = cur;
       return next;
     });
@@ -1137,6 +1310,18 @@ export default function CadastrosPage() {
                 .single();
               if (insErr || !inserted) throw insErr || new Error("Erro ao criar variação");
               variacaoId = inserted.id;
+
+              if (v.fotosUrlsParaCopiar?.length) {
+                const { error: copiaFotosErr } = await supabase.from("fotos_armas").insert(
+                  v.fotosUrlsParaCopiar.map((f) => ({
+                    arma_id: editingId,
+                    variacao_id: variacaoId,
+                    foto_url: f.foto_url,
+                    ordem: f.ordem,
+                  }))
+                );
+                if (copiaFotosErr) throw new Error(`Copiar fotos da variação: ${copiaFotosErr.message}`);
+              }
             }
 
             const fotosToRemove = v.fotosParaRemover || [];
@@ -1229,9 +1414,23 @@ export default function CadastrosPage() {
             if (varErr || !varRow) throw varErr || new Error("Erro ao criar variação");
             const variacaoId = varRow.id;
 
+            if (v.fotosUrlsParaCopiar?.length) {
+              const { error: copiaFotosErr } = await supabase.from("fotos_armas").insert(
+                v.fotosUrlsParaCopiar.map((f) => ({
+                  arma_id: armaId,
+                  variacao_id: variacaoId,
+                  foto_url: f.foto_url,
+                  ordem: f.ordem,
+                }))
+              );
+              if (copiaFotosErr) throw new Error(`Copiar fotos da variação: ${copiaFotosErr.message}`);
+            }
+
             const files = v.fotoFiles || [];
             if (files.length > 0) {
-              // Upload paralelo de todas as fotos
+              let ordemBase = v.fotosUrlsParaCopiar?.length
+                ? Math.max(...v.fotosUrlsParaCopiar.map((f) => f.ordem)) + 1
+                : 0;
               const uploadPromises = files.map(async (file, j) => {
                 const ext = file.name.split(".").pop();
                 const timestamp = Date.now();
@@ -1245,7 +1444,7 @@ export default function CadastrosPage() {
                   arma_id: armaId, 
                   variacao_id: variacaoId, 
                   foto_url: pub.publicUrl, 
-                  ordem: j 
+                  ordem: ordemBase + j 
                 });
                 if (insFoto) throw new Error(`Salvar foto ${j + 1}: ${insFoto.message}`);
               });
@@ -2823,6 +3022,17 @@ export default function CadastrosPage() {
                                 </button>
                                 <button
                                   type="button"
+                                  onClick={() => setDuplicatePrompt({ kind: "arma", armaId: arma.id })}
+                                  disabled={duplicatingId === arma.id}
+                                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-600 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800/80 disabled:opacity-50"
+                                >
+                                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                  </svg>
+                                  {duplicatingId === arma.id ? "..." : "Duplicar"}
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={() => setDeleteConfirm(arma.id)}
                                   className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-red-900/40 py-2 text-sm font-medium text-red-400 hover:bg-red-950/30"
                                 >
@@ -3026,6 +3236,27 @@ export default function CadastrosPage() {
                                           strokeLinecap="round"
                                           strokeLinejoin="round"
                                           d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                        />
+                                      </svg>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDuplicatePrompt({ kind: "arma", armaId: arma.id })}
+                                      disabled={duplicatingId === arma.id}
+                                      className="rounded-lg p-2 text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+                                      title="Duplicar"
+                                    >
+                                      <svg
+                                        className="h-5 w-5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                        strokeWidth={2}
+                                      >
+                                        <path
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
                                         />
                                       </svg>
                                     </button>
@@ -3863,13 +4094,22 @@ export default function CadastrosPage() {
                       >
                         <div className="mb-6 flex items-center justify-between border-b border-zinc-800/80 pb-4">
                           <span className="text-sm font-semibold text-zinc-200">Variação {idx + 1}</span>
-                          <button
-                            type="button"
-                            onClick={() => removeVariacao(idx)}
-                            className="rounded-lg px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/15"
-                          >
-                            Remover
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDuplicatePrompt({ kind: "variacao", index: idx })}
+                              className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                            >
+                              Duplicar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeVariacao(idx)}
+                              className="rounded-lg px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/15"
+                            >
+                              Remover
+                            </button>
+                          </div>
                         </div>
                         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                           <div>
@@ -4267,6 +4507,65 @@ export default function CadastrosPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de confirmação de duplicação */}
+      {duplicatePrompt && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setDuplicatePrompt(null)}
+        >
+          <div
+            className="relative w-full max-w-md rounded-lg border border-zinc-700 bg-zinc-900 p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-4 text-xl font-bold text-white">
+              {duplicatePrompt.kind === "arma" ? "Duplicar produto" : "Duplicar variação"}
+            </h3>
+            <p className="mb-6 text-zinc-300">
+              {duplicatePrompt.kind === "arma"
+                ? 'O novo produto será criado com o título "(cópia)". Deseja incluir as fotos na cópia?'
+                : "Deseja incluir as fotos desta variação na cópia?"}
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => setDuplicatePrompt(null)}
+                className="flex-1 rounded-lg border-2 px-4 py-2 font-medium transition-colors"
+                style={{
+                  borderColor: "#E9B20E",
+                  color: "#E9B20E",
+                  backgroundColor: "transparent",
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => confirmDuplicate(false)}
+                disabled={
+                  duplicatePrompt.kind === "arma" && duplicatingId === duplicatePrompt.armaId
+                }
+                className="flex-1 rounded-lg border border-zinc-600 bg-zinc-800 px-4 py-2 font-medium text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-50"
+              >
+                Sem fotos
+              </button>
+              <button
+                type="button"
+                onClick={() => confirmDuplicate(true)}
+                disabled={
+                  duplicatePrompt.kind === "arma" && duplicatingId === duplicatePrompt.armaId
+                }
+                className="flex-1 rounded-lg px-4 py-2 font-bold transition-opacity disabled:opacity-50"
+                style={{ backgroundColor: "#E9B20E", color: "#030711" }}
+              >
+                {duplicatePrompt.kind === "arma" && duplicatingId === duplicatePrompt.armaId
+                  ? "Duplicando..."
+                  : "Com fotos"}
+              </button>
+            </div>
           </div>
         </div>
       )}

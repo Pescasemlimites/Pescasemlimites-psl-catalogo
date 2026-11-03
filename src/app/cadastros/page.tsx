@@ -14,6 +14,7 @@ import {
   fetchVariacoesMetaPorArmaIds,
 } from "../../lib/fetchVariacoesMinPreco";
 import { emPromocaoValida } from "../../lib/promoPreco";
+import { gerarFotoAutomatica } from "../../lib/fotoAutomatica";
 
 type Marca = { id: string; nome: string };
 type Calibre = { id: string; nome: string };
@@ -203,6 +204,8 @@ export default function CadastrosPage() {
   const [fotoPreviews, setFotoPreviews] = useState<string[]>([]);
   const [fotosExistentes, setFotosExistentes] = useState<FotoArma[]>([]);
   const [fotosParaRemover, setFotosParaRemover] = useState<string[]>([]);
+  const [fotoAutomatica, setFotoAutomatica] = useState(true);
+  const [processandoFotos, setProcessandoFotos] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePrompt>(null);
@@ -565,9 +568,25 @@ export default function CadastrosPage() {
     setMessage(null);
   };
 
-  const handleFotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    
+  const handleFotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    let files = Array.from(e.target.files || []);
+    e.target.value = "";
+
+    if (files.length > 0 && fotoAutomatica) {
+      const processadas: File[] = [];
+      for (let i = 0; i < files.length; i++) {
+        setProcessandoFotos(`Removendo fundo da foto ${i + 1} de ${files.length}...`);
+        try {
+          processadas.push(await gerarFotoAutomatica(files[i]));
+        } catch (err) {
+          console.error("Erro na foto automática:", err);
+          processadas.push(files[i]);
+        }
+      }
+      setProcessandoFotos(null);
+      files = processadas;
+    }
+
     if (files.length > 0) {
       setFotoFiles(files);
       
@@ -3482,7 +3501,19 @@ export default function CadastrosPage() {
                           multiple
                           onChange={handleFotoChange}
                           className={`mt-2 ${fileInputClass}`}
+                        disabled={processandoFotos != null}
                         />
+                        <label className="mt-2 flex items-center gap-2 text-sm text-zinc-400">
+                          <input
+                            type="checkbox"
+                            checked={fotoAutomatica}
+                            onChange={(e) => setFotoAutomatica(e.target.checked)}
+                          />
+                          Foto automática (remove o fundo e aplica o fundo padrão)
+                        </label>
+                        {processandoFotos ? (
+                          <p className="mt-2 text-sm text-[#E9B20E]">{processandoFotos}</p>
+                        ) : null}
                       </div>
 
                       {(armaExtrasExistentes.length > 0 || armaExtrasPreviewsIndices.length > 0) && (

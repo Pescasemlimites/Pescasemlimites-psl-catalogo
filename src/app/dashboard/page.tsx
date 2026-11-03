@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Header from "../../components/Header";
 import Footer from "../../components/Footer";
+import ProductListCard from "../../components/ProductListCard";
 import { supabase } from "../../../src/lib/supabaseClient";
 import { useAuth } from "../../contexts/AuthContext";
 import {
@@ -32,64 +33,20 @@ type ArmaDestaque = {
   destaque_promocao?: boolean | null;
 };
 
-function PromoBannerBigCard({
-  arma,
-  minPrecoVariacao,
-  onCardClick,
-}: {
-  arma: ArmaDestaque;
-  minPrecoVariacao: number | undefined;
-  onCardClick: () => void;
-}) {
-  const orig = precoOriginalLista(minPrecoVariacao, arma.preco);
-  const cond = textoCondicaoPromocao(arma.promocao_modo, arma.promocao_parcelas_max);
-  return (
-    <button
-      type="button"
-      onClick={onCardClick}
-      className="group relative flex w-full flex-col overflow-hidden rounded-2xl border-2 border-[#E9B20E]/85 bg-zinc-900/90 text-left shadow-xl transition-all hover:border-[#f5d978] sm:flex-row"
-    >
-      <div className="pointer-events-none absolute right-0 top-0 z-10 origin-top-right translate-x-2 -translate-y-1 rotate-12 transform bg-[#E9B20E] px-10 py-1 text-xs font-black uppercase tracking-widest text-zinc-900 shadow-md sm:px-12">
-        Promoção
-      </div>
-      {(arma.primeiraFoto || arma.foto_url) && (
-        <div className="relative aspect-square w-full shrink-0 overflow-hidden sm:w-64 md:w-72">
-          <img
-            src={arma.primeiraFoto || arma.foto_url || ""}
-            alt={arma.nome}
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          />
-          <div className="absolute left-3 top-3 rounded bg-[#E9B20E] px-3 py-1 text-xs font-black uppercase text-zinc-900 shadow-lg">
-            PROMOÇÃO
-          </div>
-        </div>
-      )}
-      <div className="flex flex-1 flex-col justify-center gap-3 p-6 sm:py-8">
-        {arma.marca && <p className="text-sm text-zinc-400">{arma.marca.nome}</p>}
-        <h2 className="text-2xl font-bold text-white md:text-3xl">{arma.nome}</h2>
-        <div className="flex flex-wrap gap-1 text-sm text-zinc-400">
-          {arma.calibre && <span>{arma.calibre.nome}</span>}
-          {arma.calibre && arma.espec_capacidade_tiros && <span>•</span>}
-          {arma.espec_capacidade_tiros && <span>{arma.espec_capacidade_tiros} tiros</span>}
-        </div>
-        <div className="mt-2 space-y-1">
-          {orig != null && (
-            <p className="text-sm text-zinc-500 line-through">De R$ {formatBRL(orig)}</p>
-          )}
-          <p className="text-3xl font-bold text-[#E9B20E] md:text-4xl">
-            R$ {formatBRL(Number(arma.preco_promocional))}
-          </p>
-          {cond ? <p className="text-sm text-zinc-400">{cond}</p> : null}
-        </div>
-        <span className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-[#E9B20E]">
-          Ver produto
-          <svg className="h-4 w-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-        </span>
-      </div>
-    </button>
-  );
+function promoMetaLinha(arma: ArmaDestaque) {
+  const parts = [
+    arma.calibre?.nome,
+    arma.espec_capacidade_tiros ? `${arma.espec_capacidade_tiros} tiros` : null,
+  ].filter(Boolean) as string[];
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function getCarouselStep(el: HTMLDivElement) {
+  const first = el.children[0] as HTMLElement | undefined;
+  if (!first) return el.clientWidth;
+  const second = el.children[1] as HTMLElement | undefined;
+  if (!second) return first.offsetWidth;
+  return second.offsetLeft - first.offsetLeft;
 }
 
 function InlineProductCarousel({
@@ -113,21 +70,26 @@ function InlineProductCarousel({
   const scrollByDir = (dir: -1 | 1) => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollBy({ left: dir * el.clientWidth, behavior: "smooth" });
+    el.scrollBy({ left: dir * getCarouselStep(el), behavior: "smooth" });
   };
 
   const onScrollSnap = () => {
     const el = scrollRef.current;
     if (!el || !items.length) return;
-    const w = el.clientWidth || 1;
-    const i = Math.round(el.scrollLeft / w);
+    const step = getCarouselStep(el) || 1;
+    const i = Math.round(el.scrollLeft / step);
     setActive(Math.min(items.length - 1, Math.max(0, i)));
   };
 
   if (items.length === 0) return null;
 
+  const slideClass =
+    items.length === 1
+      ? "mx-auto flex w-full max-w-sm shrink-0 flex-col"
+      : "flex w-[82%] min-w-[82%] shrink-0 snap-start flex-col sm:w-[47%] sm:min-w-[47%] lg:w-[32%] lg:min-w-[32%]";
+
   return (
-    <div className="relative mx-auto w-full max-w-4xl" aria-label={ariaLabel}>
+    <div className="relative mx-auto w-full max-w-6xl" aria-label={ariaLabel}>
       <div className="relative">
         {items.length > 1 ? (
           <>
@@ -135,7 +97,7 @@ function InlineProductCarousel({
               type="button"
               aria-label={prevAriaLabel}
               onClick={() => scrollByDir(-1)}
-              className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:left-2 sm:p-2.5"
+              className="absolute left-0 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-2 text-white shadow hover:bg-black/75 sm:-left-1 sm:p-2.5"
             >
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
@@ -145,7 +107,7 @@ function InlineProductCarousel({
               type="button"
               aria-label={nextAriaLabel}
               onClick={() => scrollByDir(1)}
-              className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white shadow hover:bg-black/70 sm:right-2 sm:p-2.5"
+              className="absolute right-0 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-2 text-white shadow hover:bg-black/75 sm:-right-1 sm:p-2.5"
             >
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -157,10 +119,10 @@ function InlineProductCarousel({
         <div
           ref={scrollRef}
           onScroll={onScrollSnap}
-          className="flex snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-2xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="flex items-stretch gap-4 overflow-x-auto overflow-y-hidden overscroll-x-contain scroll-smooth snap-x snap-mandatory px-1 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:gap-5"
         >
           {items.map((arma) => (
-            <div key={arma.id} className="w-full min-w-full shrink-0 snap-center px-0.5 sm:px-2">
+            <div key={arma.id} className={slideClass}>
               {renderSlide(arma)}
             </div>
           ))}
@@ -168,7 +130,7 @@ function InlineProductCarousel({
       </div>
 
       {items.length > 1 ? (
-        <div className="mt-4 flex justify-center gap-2">
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
           {items.map((arma, i) => (
             <button
               key={arma.id}
@@ -177,7 +139,7 @@ function InlineProductCarousel({
               onClick={() => {
                 const el = scrollRef.current;
                 if (!el) return;
-                el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+                el.scrollTo({ left: i * getCarouselStep(el), behavior: "smooth" });
               }}
               className={`h-2 rounded-full transition-all ${i === active ? "w-8 bg-[#E9B20E]" : "w-2 bg-white/40 hover:bg-white/60"}`}
             />
@@ -412,6 +374,68 @@ export default function Dashboard() {
       <div className="relative z-10 flex min-h-screen flex-col">
         <Header />
         <div className="flex flex-1 flex-col items-center px-4 py-12 md:py-16">
+        {armasBannerPromo.length > 0 && emPromocaoValida(armasBannerPromo[0]) && (
+          <section className="mb-12 w-full max-w-6xl px-1">
+            <div className="mb-6 flex flex-col items-center gap-2 text-center">
+              <div
+                className="flex items-center justify-center rounded-full border px-4 py-2"
+                style={{
+                  borderColor: "rgba(233, 178, 14, 0.5)",
+                  backgroundColor: "rgba(15, 23, 42, 0.5)",
+                }}
+              >
+                <span className="text-sm font-medium" style={{ color: "#E9B20E" }}>
+                  Promoções
+                </span>
+              </div>
+              <h2 className="text-3xl font-bold text-white sm:text-4xl">Promoções em destaque</h2>
+              {armasBannerPromo.length > 1 ? (
+                <p className="text-sm text-zinc-500">
+                  Arraste para o lado <span className="text-zinc-600">(ou use as setas)</span> para ver todas
+                </p>
+              ) : null}
+            </div>
+            <InlineProductCarousel
+              items={armasBannerPromo}
+              ariaLabel="Armas em promoção"
+              prevAriaLabel="Promoção anterior"
+              nextAriaLabel="Próxima promoção"
+              dotAriaLabel={(i) => `Ir para promoção ${i + 1}`}
+              renderSlide={(arma) => (
+                <div
+                  className={`relative flex h-full min-h-0 w-full flex-1 flex-col rounded-2xl ring-offset-2 ring-offset-[#030711]/80 ${
+                    arma.destaque_promocao ? "ring-2 ring-[#E9B20E]" : "ring-1 ring-[#E9B20E]/45"
+                  }`}
+                >
+                  {arma.destaque_promocao ? (
+                    <div className="pointer-events-none absolute right-2 top-2 z-10 rounded bg-[#E9B20E] px-2 py-0.5 text-[10px] font-black uppercase text-zinc-900 shadow">
+                      Destaque
+                    </div>
+                  ) : null}
+                  <ProductListCard
+                    product={arma}
+                    minVariacaoPreco={minPrecoBannerPromoByArmaId.get(arma.id)}
+                    metaLinha={promoMetaLinha(arma)}
+                    marcaNome={arma.marca?.nome ?? null}
+                    showMarcaAboveTitle
+                  />
+                </div>
+              )}
+            />
+            <div className="mt-6 flex justify-center">
+              <button
+                type="button"
+                onClick={() => router.push("/promocoes")}
+                className="inline-flex items-center gap-2 rounded-lg border border-[#E9B20E]/60 px-6 py-3 text-sm font-semibold text-[#E9B20E] transition-colors hover:bg-[#E9B20E]/10"
+              >
+                Ver todas as promoções
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </section>
+        )}
       <div className="flex w-full max-w-4xl flex-col items-center justify-center gap-8 text-center">
         {/* Premium Badge */}
         <div
@@ -484,43 +508,6 @@ export default function Dashboard() {
         </div>
         </div>
 
-        {armasBannerPromo.length > 0 && emPromocaoValida(armasBannerPromo[0]) && (
-          <section className="mt-10 w-full max-w-4xl px-1">
-            <div className="mb-6 flex flex-col items-center gap-2 text-center">
-              <div
-                className="flex items-center justify-center rounded-full border px-4 py-2"
-                style={{
-                  borderColor: "rgba(233, 178, 14, 0.5)",
-                  backgroundColor: "rgba(15, 23, 42, 0.5)",
-                }}
-              >
-                <span className="text-sm font-medium" style={{ color: "#E9B20E" }}>
-                  Promoções
-                </span>
-              </div>
-              <h2 className="text-2xl font-bold text-white sm:text-3xl">Armas em promoção</h2>
-              {armasBannerPromo.length > 1 ? (
-                <p className="text-sm text-zinc-500">
-                  Arraste para o lado <span className="text-zinc-600">(ou use as setas)</span> para ver cada arma
-                </p>
-              ) : null}
-            </div>
-            <InlineProductCarousel
-              items={armasBannerPromo}
-              ariaLabel="Armas em promoção"
-              prevAriaLabel="Promoção anterior"
-              nextAriaLabel="Próxima promoção"
-              dotAriaLabel={(i) => `Ir para promoção ${i + 1}`}
-              renderSlide={(arma) => (
-                <PromoBannerBigCard
-                  arma={arma}
-                  minPrecoVariacao={minPrecoBannerPromoByArmaId.get(arma.id)}
-                  onCardClick={() => router.push(`/produto/${arma.id}`)}
-                />
-              )}
-            />
-          </section>
-        )}
         </div>
 
         {/* Modelos em Destaque Section */}

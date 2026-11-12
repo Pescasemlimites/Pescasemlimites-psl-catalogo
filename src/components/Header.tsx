@@ -21,6 +21,11 @@ export default function Header() {
     setIsMenuOpen(false);
   };
 
+  const handleOrcamentos = () => {
+    router.push("/orcamentos");
+    setIsMenuOpen(false);
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
@@ -99,28 +104,39 @@ export default function Header() {
 
           {/* Cadastros Button - apenas para admin */}
           {isAdmin && (
-            <button
-              className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors"
-              style={{ backgroundColor: "#E9B20E" }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#D4A00D")}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#E9B20E")}
-              onClick={() => router.push("/cadastros")}
-            >
-              <svg
-                className="h-4 w-4 text-zinc-900"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
+            <>
+              <button
+                className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors"
+                style={{ backgroundColor: "#E9B20E" }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#D4A00D")}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#E9B20E")}
+                onClick={handleOrcamentos}
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
-              <span className="text-sm font-bold text-zinc-900">Cadastros</span>
-            </button>
+                <span className="text-sm font-bold text-zinc-900">Orçamentos</span>
+              </button>
+              <button
+                className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors"
+                style={{ backgroundColor: "#E9B20E" }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#D4A00D")}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#E9B20E")}
+                onClick={() => router.push("/cadastros")}
+              >
+                <svg
+                  className="h-4 w-4 text-zinc-900"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 4v16m8-8H4"
+                  />
+                </svg>
+                <span className="text-sm font-bold text-zinc-900">Cadastros</span>
+              </button>
+            </>
           )}
 
           {/* Logout Button */}
@@ -247,6 +263,15 @@ export default function Header() {
             </button>
 
             {/* Cadastros Button - apenas para admin */}
+            {isAdmin && (
+              <button
+                className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors w-full"
+                style={{ backgroundColor: "#E9B20E" }}
+                onClick={handleOrcamentos}
+              >
+                <span className="text-sm font-bold text-zinc-900">Orçamentos</span>
+              </button>
+            )}
             {isAdmin && (
               <button
                 className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors w-full"

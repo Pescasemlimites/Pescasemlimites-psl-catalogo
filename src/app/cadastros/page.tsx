@@ -39,6 +39,7 @@ type Arma = {
   marca_id: string | null;
   espec_comprimento_cano: string | null;
   caracteristica_acabamento: string | null;
+  descricao: string | null;
   foto_url: string | null;
   em_destaque: boolean | null;
   em_promocao?: boolean | null;
@@ -68,6 +69,7 @@ type FormArma = {
   marca_id: string;
   espec_comprimento_cano: string;
   caracteristica_acabamento: string;
+  descricao: string;
   em_destaque: boolean;
   em_promocao: boolean;
   preco_promocional: string;
@@ -116,6 +118,7 @@ const initialForm: FormArma = {
   marca_id: "",
   espec_comprimento_cano: "",
   caracteristica_acabamento: "",
+  descricao: "",
   em_destaque: false,
   em_promocao: false,
   preco_promocional: "",
@@ -746,6 +749,7 @@ export default function CadastrosPage() {
           calibres_id: original.calibres_id,
           espec_comprimento_cano: original.espec_comprimento_cano,
           caracteristica_acabamento: original.caracteristica_acabamento,
+          descricao: original.descricao,
           em_destaque: false,
           em_promocao: original.em_promocao,
           preco_promocional: original.preco_promocional,
@@ -911,6 +915,7 @@ export default function CadastrosPage() {
       marca_id: arma.marca_id || "",
       espec_comprimento_cano: arma.espec_comprimento_cano || "",
       caracteristica_acabamento: arma.caracteristica_acabamento || "",
+      descricao: arma.descricao || "",
       em_destaque: arma.em_destaque || false,
       em_promocao: arma.em_promocao || false,
       preco_promocional:
@@ -1273,6 +1278,7 @@ export default function CadastrosPage() {
             calibres_id: null,
             espec_comprimento_cano: null,
             caracteristica_acabamento: form.caracteristica_acabamento || null,
+            descricao: form.descricao.trim() || null,
             em_destaque: form.em_destaque || false,
             ...promocaoColunasParaDb(),
             ...custoMargemParaDb(),
@@ -1398,6 +1404,7 @@ export default function CadastrosPage() {
               calibres_id: null,
               espec_comprimento_cano: null,
               caracteristica_acabamento: form.caracteristica_acabamento || null,
+              descricao: form.descricao.trim() || null,
               em_destaque: form.em_destaque || false,
               ...promocaoColunasParaDb(),
               ...custoMargemParaDb(),
@@ -1496,6 +1503,7 @@ export default function CadastrosPage() {
           calibres_id: form.calibre_id || null,
           espec_comprimento_cano: form.espec_comprimento_cano || null,
           caracteristica_acabamento: form.caracteristica_acabamento || null,
+          descricao: form.descricao.trim() || null,
           em_destaque: form.em_destaque || false,
           ...promocaoColunasParaDb(),
           ...custoMargemParaDb(),
@@ -1634,6 +1642,7 @@ export default function CadastrosPage() {
               calibres_id: form.calibre_id || null,
               espec_comprimento_cano: form.espec_comprimento_cano || null,
               caracteristica_acabamento: form.caracteristica_acabamento || null,
+              descricao: form.descricao.trim() || null,
               em_destaque: form.em_destaque || false,
               ...promocaoColunasParaDb(),
               ...custoMargemParaDb(),
@@ -4492,6 +4501,20 @@ export default function CadastrosPage() {
                       onChange={handleChange}
                       className={inputClass}
                       placeholder="Ex.: fosco, cromado"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label htmlFor="descricao" className={labelClass}>
+                      Descrição
+                    </label>
+                    <textarea
+                      id="descricao"
+                      name="descricao"
+                      rows={6}
+                      value={form.descricao}
+                      onChange={handleChange}
+                      className={inputClass}
+                      placeholder="Texto do folder. Termine com CAL. e o calibre."
                     />
                   </div>
                 </div>

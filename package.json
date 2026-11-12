@@ -6,7 +6,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "import:fire-eagle": "node scripts/import-fire-eagle-catalogo.mjs",
+    "import:fire-eagle:dry": "node scripts/import-fire-eagle-catalogo.mjs --dry-run",
+    "import:fire-eagle-acessorios": "node scripts/import-fire-eagle-acessorios.mjs",
+    "import:fire-eagle-acessorios:dry": "node scripts/import-fire-eagle-acessorios.mjs --dry-run",
+    "upload:fire-eagle-acessorios": "node scripts/upload-fire-eagle-acessorios.mjs",
+    "upload:fire-eagle-acessorios:dry": "node scripts/upload-fire-eagle-acessorios.mjs --dry-run",
+    "upload:fire-eagle-fotos": "node scripts/upload-fire-eagle-fotos.mjs",
+    "upload:fire-eagle-fotos:dry": "node scripts/upload-fire-eagle-fotos.mjs --dry-run"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",
@@ -24,6 +32,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.5",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

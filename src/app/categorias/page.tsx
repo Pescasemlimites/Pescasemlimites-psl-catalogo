@@ -12,15 +12,26 @@ type Categoria = {
   nome: string;
 };
 
-// Mapeamento de nomes de categorias para ícones
+// Mapeamento de nomes de categorias para ícones (chave = nome do banco, minúsculo)
 const ICON_MAP: Record<string, string> = {
-  Pistolas: "/icons/pistola.png",
-  "Revólveres": "/icons/revolver.png",
-  Espingarda_Semi: "/icons/espingardaSemi.png",
-  Espingarda_Rep: "/icons/espingardaRep.png",
-  Carabinas: "/icons/carabina.png",
-  Fuzil: "/icons/fuzil.png",
+  pistola: "/icons/pistola.png",
+  pistolas: "/icons/pistola.png",
+  revolver: "/icons/revolver.png",
+  revolveres: "/icons/revolver.png",
+  "revólveres": "/icons/revolver.png",
+  carabina: "/icons/carabina.png",
+  carabinas: "/icons/carabina.png",
+  "espingarda-semiauto": "/icons/espingardaSemi.png",
+  espingarda_semi: "/icons/espingardaSemi.png",
+  "espingarda-repeticao": "/icons/espingardaRep.png",
+  espingarda_rep: "/icons/espingardaRep.png",
+  fuzil: "/icons/fuzil.png",
+  fuzis: "/icons/fuzil.png",
 };
+
+function iconForCategoria(nome: string): string | undefined {
+  return ICON_MAP[nome.trim().toLowerCase()];
+}
 
 /** Troca hífens e underscores por espaços e capitaliza o início de cada palavra (pt-BR). */
 function formatCategoriaLabel(nome: string): string {
@@ -142,9 +153,9 @@ export default function CategoriasPage() {
                   className="flex items-center gap-4 rounded-xl px-5 py-4 text-left transition-opacity hover:opacity-95"
                   style={{ backgroundColor: "#E9B20E" }}
                 >
-                  {ICON_MAP[categoria.nome] && (
+                  {iconForCategoria(categoria.nome) && (
                     <Image
-                      src={ICON_MAP[categoria.nome]}
+                      src={iconForCategoria(categoria.nome)!}
                       alt={formatCategoriaLabel(categoria.nome)}
                       width={40}
                       height={40}

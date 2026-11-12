@@ -5,8 +5,7 @@ const TAMANHO = 1200;
 /** Área máxima ocupada pela arma (fração da largura/altura) */
 const OCUPACAO_LARGURA = 0.86;
 const OCUPACAO_ALTURA = 0.62;
-/** Linha do "chão" do fundo, onde a base da arma encosta (fração da altura) */
-const LINHA_CHAO = 0.86;
+/** A arma fica no centro do quadro (o card 4:3 corta em cima e embaixo). */
 
 function carregarImagem(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -64,7 +63,7 @@ export async function gerarFotoAutomatica(file: File): Promise<File> {
     const w = r.w * escala;
     const h = r.h * escala;
     const x = (TAMANHO - w) / 2;
-    const y = TAMANHO * LINHA_CHAO - h;
+    const y = (TAMANHO - h) / 2;
 
     // Sombra de contato no chão
     ctx.save();

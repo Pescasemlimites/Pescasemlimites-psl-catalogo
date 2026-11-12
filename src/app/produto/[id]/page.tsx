@@ -21,6 +21,7 @@ type Arma = {
   espec_carregadores: string | null;
   espec_comprimento_cano: string | null;
   caracteristica_acabamento: string | null;
+  descricao: string | null;
   em_destaque?: boolean | null;
   em_promocao?: boolean | null;
   preco_promocional?: number | null;
@@ -834,6 +835,15 @@ export default function ProdutoPage() {
               </div>
             </div>
           </div>
+
+          {produto.descricao?.trim() ? (
+            <div className="mb-8 rounded-lg border border-[#E9B20E] bg-zinc-900/40 p-6">
+              <h2 className="mb-4 text-2xl font-bold text-white">Descrição</h2>
+              <p className="whitespace-pre-line text-base leading-relaxed text-zinc-200">
+                {produto.descricao.trim()}
+              </p>
+            </div>
+          ) : null}
 
           {/* Seção de Especificações */}
           <div className="rounded-lg border border-[#E9B20E] bg-zinc-900/40 p-6">
